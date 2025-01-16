@@ -20,26 +20,15 @@ This project aims to simplify the process of identifying unknown or custom baud 
 ### Prerequisites
 
 - A machine running Linux (preferred) or other operating systems with UART communication support.
-- [Python 3.x](https://www.python.org/downloads/) or any other supported language runtime (depending on the tool).
+- [Rust](https://www.rust-lang.org/) installed on your system.
 - Basic understanding of UART communication.
 
 ### Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/your-username/identify-baudrate-values.git
-   cd identify-baudrate-values
-   ```
-
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Run the tool:
-   ```bash
-   python baudrate_detector.py
-   ```
+Install the tool directly from crates.io using Cargo:
+```bash
+cargo install baudrate-detector
+```
 
 ---
 
@@ -48,7 +37,7 @@ This project aims to simplify the process of identifying unknown or custom baud 
 1. Connect your UART device to your system.
 2. Run the tool and specify the serial port:
    ```bash
-   python baudrate_detector.py --port /dev/ttyUSB0
+   baudrate-detector --port /dev/ttyUSB0
    ```
 3. The tool will cycle through common baud rates and display the correct value once detected.
 
@@ -63,7 +52,7 @@ By default, the tool tests the following baud rates:
 - 460800
 - 921600
 
-You can modify this list in the configuration file if needed.
+You can modify this list by editing the configuration file if needed.
 
 ---
 

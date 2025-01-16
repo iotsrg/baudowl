@@ -1,0 +1,58 @@
+// BaudSolver: A Rust project to search and identify the correct baudrate values.
+// This crate will be installable via Cargo.
+
+use std::time::Duration;
+use serialport::{SerialPort, SerialPortInfo};
+use std::error::Error;
+
+const BAUD_RATES: &[u32] = &[
+    110, 150, 300, 600, 800, 1200, 1600, 2400, 2604, 3200, 4800, 5208, 6400, 9600, 9606, 10417,
+    12800, 14400, 15625, 14406, 19200, 19211, 25600, 26042, 28800, 31250, 38400, 38422, 52083,
+    57600, 57692, 78600, 104167, 115200, 115384, 156250, 230400, 230769, 256000, 312500, 460800,
+    461538, 921600, 923076, 1000000, 1500000, 3000000, 4000000,
+];
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("Error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn Error>> {
+    println!("BaudSolver: Searching for active baud rates...");
+
+    let ports = serialport::available_ports()?;
+    if ports.is_empty() {
+        println!("No serial ports found.");
+        return Ok(());
+    }
+
+    for port in ports {
+        println!("\nScanning port: {}", port.port_name);
+        for &baud_rate in BAUD_RATES {
+            if test_baudrate(&port, baud_rate)? {
+                println!("\u{2713} Active baudrate found: {baud_rate} bps");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn test_baudrate(port_info: &SerialPortInfo, baud_rate: u32) -> Result<bool, Box<dyn Error>> {
+    let builder = serialport::new(&port_info.port_name, baud_rate)
+        .timeout(Duration::from_millis(200));
+
+    match builder.open() {
+        Ok(mut port) => {
+            port.write_all(b"test")?; // Send a test packet
+            let mut buffer = vec![0; 32];
+            match port.read(&mut buffer) {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            }
+        }
+        Err(_) => Ok(false),
+    }
+}

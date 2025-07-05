@@ -1,10 +1,10 @@
-const BANNER: &str = r#"
+```
     )___(
-    (o o)  🐕  BAUDHOUND v1.1
+    (o o)   BAUDHOUND v1.1
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
-"#;
+```
 
 # BaudSolver
 Identify Unknown and custom baudrate values.

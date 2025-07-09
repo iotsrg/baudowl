@@ -1,0 +1,18 @@
+[package]
+name = "baudhound"
+version = "1.1.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "The Ultimate Serial Port Detective"
+license = "MIT"
+repository = "https://github.com/yourusername/baudhound"
+
+[[bin]]
+name = "baudhound"
+path = "src/main.rs"
+
+[dependencies]
+serialport = "4.2"
+clap = { version = "4.0", features = ["derive"] }
+ctrlc = "3.2"
+colored = "2.0"

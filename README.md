@@ -1,4 +1,4 @@
-## BaudHound 🐕
+## BaudHound 
 **The Ultimate Serial Port Detective**
 ```
     )___(

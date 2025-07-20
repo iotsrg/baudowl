@@ -1,14 +1,14 @@
 [package]
-name = "baudhound"
-version = "1.1.0"
-edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
+name = "baudowl"
+version = "1.0"
+edition = "2025"
+authors = ["IoTSRG Team"]
 description = "The Ultimate Serial Port Detective"
 license = "MIT"
-repository = "https://github.com/yourusername/baudhound"
+repository = "https://github.com/iotsrg/baudowl"
 
 [[bin]]
-name = "baudhound"
+name = "baudowl"
 path = "src/main.rs"
 
 [dependencies]

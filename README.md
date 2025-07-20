@@ -1,5 +1,8 @@
 # 🦉 BaudOwl
 
+<img width="200" height="200" alt="baudowl" src="https://github.com/user-attachments/assets/8659798d-e6ad-4126-868a-7ef65839c13f" />
+
+
 **The Ultimate Serial Port Detective**
 
 ```

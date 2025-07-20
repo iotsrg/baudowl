@@ -26,19 +26,19 @@
 
   #### Build from source
   ```bash
-  git clone https://github.com/yourusername/baudhound.git
-  cd baudhound
+  git clone https://github.com/yourusername/baudowl.git
+  cd baudowl
   cargo build --release
-  sudo cp target/release/baudhound /usr/local/bin/
+  sudo cp target/release/baudowl /usr/local/bin/
   ```
 
   #### Usage
   ```bash
-  baudhound --port /dev/ttyUSB0
-  baudhound --highspeed --auto
-  baudhound --turbo --quiet
-  baudhound --name mydevice
-  baudhound --help
+  baudowl --port /dev/ttyUSB0
+  baudowl --highspeed --auto
+  baudowl --turbo --quiet
+  baudowl --name mydevice
+  baudowl --help
   Option	Description	Default
 
   ```

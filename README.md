@@ -1,8 +1,8 @@
-## BaudHound 
+## BaudOwl 
 **The Ultimate Serial Port Detective**
 ```
     )___(
-    (o o)   BAUDHOUND v1.1
+    (o o)   BaudOwl v1.1
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!

@@ -68,7 +68,7 @@ baudowl --help
 
 ---
 
-## 📊 Example Output
+## Example Output
 
 ```
 [+] Scanning /dev/ttyUSB0...
@@ -79,13 +79,13 @@ baudowl --help
 
 ---
 
-## 🧠 Authors & Credits
+## Authors & Credits
 
 Developed with ❤️ by the [IoT Security Research Group](https://github.com/iotsrg)  
 Logo and tooling inspired by field use cases in embedded security and UART fuzzing.
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the [MIT License](LICENSE).

@@ -26,7 +26,7 @@
 
   #### Build from source
   ```bash
-  git clone https://github.com/yourusername/baudowl.git
+  git clone https://github.com/iotsrg/baudowl.git
   cd baudowl
   cargo build --release
   sudo cp target/release/baudowl /usr/local/bin/

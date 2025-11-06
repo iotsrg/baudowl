@@ -78,6 +78,8 @@ baudowl --help
 [✓] Baudrate Detected: 115200
 [✓] Protocol: UART ASCII
 [✓] Minicom profile generated: mydevice
+[] Challenge 2
+[] challenge 3
 ```
 
 ---

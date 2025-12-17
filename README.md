@@ -87,7 +87,6 @@ baudowl --help
 ## Authors & Credits
 
 Developed with ❤️ by the [IoT Security Research Group](https://github.com/iotsrg)  
-Logo and tooling inspired by field use cases in embedded security and UART fuzzing.
 
 ---
 

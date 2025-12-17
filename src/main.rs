@@ -5,13 +5,49 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    thread,
     time::{Duration, Instant},
 };
 use clap::Parser;
-use serialport::SerialPort;
 use ctrlc;
 use colored::*;
+
+use std::path::Path;
+
+/// Validate config name contains only safe characters (alphanumeric, dash, underscore)
+fn validate_config_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Config name cannot be empty".to_string());
+    }
+    if name.len() > 64 {
+        return Err("Config name too long (max 64 chars)".to_string());
+    }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Err("Config name can only contain alphanumeric characters, dashes, and underscores".to_string());
+    }
+    Ok(())
+}
+
+/// Validate serial port path is a valid device path
+fn validate_port_path(port: &str) -> Result<(), String> {
+    // Must start with /dev/
+    if !port.starts_with("/dev/") {
+        return Err("Port must be a device path starting with /dev/".to_string());
+    }
+    // No path traversal
+    if port.contains("..") {
+        return Err("Port path cannot contain '..'".to_string());
+    }
+    // No newlines or control characters (prevents config injection)
+    if port.chars().any(|c| c.is_control()) {
+        return Err("Port path cannot contain control characters".to_string());
+    }
+    // Validate it looks like a real device path
+    let path = Path::new(port);
+    if path.components().count() > 4 {
+        return Err("Port path too deep".to_string());
+    }
+    Ok(())
+}
 
 const BANNER: &str = r#"
     )___(
@@ -67,13 +103,10 @@ struct Args {
     highspeed: bool,
 }
 
-struct baudowl {
+struct BaudOwl {
     args: Args,
-    base_baudrates: Vec<u32>,
-    highspeed_baudrates: Vec<u32>,
     running: Arc<AtomicBool>,
     stats: DetectionStats,
-    current_baudrate_index: usize,
 }
 
 #[derive(Default)]
@@ -83,22 +116,13 @@ struct DetectionStats {
     detection_time: Duration,
 }
 
-impl baudowl {
-    fn new(args: Args) -> Self {
-        let base_baudrates = vec![
-            110, 150, 300, 600, 800, 1200, 1600, 1800, 2400, 2604, 3200, 4800,
-            5208, 6400, 9600, 9606, 10417, 12800, 14400, 15625, 14406, 19200, 19211,
-            25600, 26042, 28800, 31250, 38400, 38422, 52083, 57600, 57692, 78600,
-            104167, 115200, 115384, 156250, 230400, 230769, 256000, 312500, 460800,
-            461538, 921600, 923076,
-        ];
-
-        let highspeed_baudrates = vec![
-            1_000_000,
-            1_500_000,
-            3_000_000,
-            4_000_000,
-        ];
+impl BaudOwl {
+    fn new(args: Args) -> Result<Self, String> {
+        // Validate inputs before proceeding
+        validate_port_path(&args.port)?;
+        if let Some(ref name) = args.name {
+            validate_config_name(name)?;
+        }
 
         let running = Arc::new(AtomicBool::new(true));
         let r = running.clone();
@@ -109,161 +133,180 @@ impl baudowl {
 
         let auto = args.auto || args.name.is_some();
 
-        Self {
+        Ok(Self {
             args: Args { auto, ..args },
-            base_baudrates,
-            highspeed_baudrates,
             running,
             stats: DetectionStats::default(),
-            current_baudrate_index: 0,
-        }
+        })
     }
 
     fn get_active_baudrates(&self) -> Vec<u32> {
-        let mut rates = self.base_baudrates.clone();
+        // Prioritize common baud rates first (most likely to hit)
+        let mut common_rates = vec![
+            115200, 9600, 57600, 38400, 19200, 230400, 460800, 921600,
+            1200, 2400, 4800, 14400, 28800, 76800, 128000, 256000,
+        ];
         
         if self.args.highspeed {
-            rates.extend(self.highspeed_baudrates.iter().cloned());
+            common_rates.extend([1_000_000, 1_500_000, 2_000_000, 3_000_000, 4_000_000]);
         }
 
         if self.args.turbo {
-            rates.retain(|&r| self.is_common_baudrate(r));
-        }
-
-        rates
-    }
-
-    fn is_common_baudrate(&self, rate: u32) -> bool {
-        match rate {
-            300 | 1200 | 2400 | 4800 | 9600 | 19200 | 38400 | 57600 |
-            115200 | 230400 | 460800 | 921600 | 1_000_000 | 1_500_000 => true,
-            _ => false,
+            // Turbo mode: only most common rates
+            vec![115200, 9600, 57600, 38400, 19200, 230400, 460800, 921600]
+        } else {
+            common_rates
         }
     }
 
     fn print_baudrates(&self) {
-        println!("{}", "Standard baudrates:".bold().green());
-        for (i, rate) in self.base_baudrates.iter().enumerate() {
-            print!("{:8}", rate);
+        let rates = self.get_active_baudrates();
+        println!("{}", "Supported baudrates:".bold().green());
+        for (i, rate) in rates.iter().enumerate() {
+            print!("{:>8}", rate);
             if (i + 1) % 6 == 0 { println!(); }
         }
-
-        if self.args.highspeed {
-            println!("\n\n{}", "Ultra-high baudrates:".bold().blue());
-            for rate in &self.highspeed_baudrates {
-                print!("{:8}", rate);
-            }
-        }
         println!();
-    }
-
-    fn open_serial_port(&self, baudrate: u32) -> Result<Box<dyn SerialPort>, serialport::Error> {
-        let mut port = serialport::new(&self.args.port, baudrate)
-            .timeout(Duration::from_secs(self.args.timeout))
-            .open()?;
-            
-        port.set_flow_control(serialport::FlowControl::None)?;
-        port.set_data_bits(serialport::DataBits::Eight)?;
-        port.set_parity(serialport::Parity::None)?;
-        port.set_stop_bits(serialport::StopBits::One)?;
-        
-        Ok(port)
-    }
-
-    fn next_baudrate(&mut self, port: &mut Box<dyn SerialPort>, rates: &[u32], direction: i32) {
-        self.stats.baudrates_tried += 1;
-        self.current_baudrate_index = (self.current_baudrate_index as i32 + direction) as usize;
-        
-        if self.current_baudrate_index >= rates.len() {
-            self.current_baudrate_index = 0;
-        } else if (self.current_baudrate_index as i32) < 0 {
-            self.current_baudrate_index = rates.len() - 1;
-        }
-
-        port.clear(serialport::ClearBuffer::All).ok();
-        port.set_baud_rate(rates[self.current_baudrate_index]).ok();
     }
 
     fn detect_baudrate(&mut self) -> Result<u32, Box<dyn std::error::Error>> {
         let start_time = Instant::now();
         let rates = self.get_active_baudrates();
-        let mut port = self.open_serial_port(rates[0])?;
         
-        if !self.args.auto {
-            let running = self.running.clone();
-            thread::spawn(move || {
-                let mut input = String::new();
-                while running.load(Ordering::SeqCst) {
-                    io::stdin().read_line(&mut input).ok();
-                    input.clear();
-                }
-            });
-        }
-
-        let mut buffer = [0; 1024];
-        let mut count = 0;
-        let mut whitespace = 0;
-        let mut punctuation = 0;
-        let mut vowels = 0;
-        let mut start_time_current = Instant::now();
-        
-        let punctuation_chars = ['.', ',', ':', ';', '?', '!'];
-        let vowel_chars = ['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U'];
-
         println!("{}", "Starting detection...".bright_blue());
         if self.args.highspeed {
             println!("{}", "High-speed mode: Enabled".bright_magenta());
         }
+        println!("Testing {} baud rates...\n", rates.len());
 
-        loop {
-            if start_time_current.elapsed() >= Duration::from_secs(self.args.timeout) {
-                self.next_baudrate(&mut port, &rates, -1);
-                start_time_current = Instant::now();
-                count = 0;
-                whitespace = 0;
-                punctuation = 0;
-                vowels = 0;
-            }
-
-            match port.read(&mut buffer) {
-                Ok(n) => {
-                    self.stats.bytes_processed += n;
-                    
-                    for &byte in &buffer[..n] {
-                        let c = byte as char;
-                        
-                        if !self.args.quiet {
-                            print!("{}", c);
-                            io::stdout().flush().ok();
-                        }
-
-                        if c.is_ascii() && !c.is_ascii_control() {
-                            if c.is_whitespace() {
-                                whitespace += 1;
-                            } else if punctuation_chars.contains(&c) {
-                                punctuation += 1;
-                            } else if vowel_chars.contains(&c) {
-                                vowels += 1;
-                            }
-                            count += 1;
-                        }
-
-                        if count >= self.args.threshold && whitespace > 0 && punctuation > 0 && vowels > 0 {
-                            self.stats.detection_time = start_time.elapsed();
-                            return Ok(rates[self.current_baudrate_index]);
-                        }
-                    }
-                }
-                _ => continue,
-            }
-
+        for &baudrate in &rates {
             if !self.running.load(Ordering::SeqCst) {
                 break;
+            }
+
+            self.stats.baudrates_tried += 1;
+            print!("{} {:>7} baud... ", "Testing:".cyan(), baudrate);
+            io::stdout().flush().ok();
+
+            // Open port with short timeout for non-blocking behavior
+            let port_result = serialport::new(&self.args.port, baudrate)
+                .timeout(Duration::from_millis(100))
+                .open();
+
+            let mut port = match port_result {
+                Ok(p) => p,
+                Err(e) => {
+                    println!("{}", format!("Failed to open: {}", e).red());
+                    continue;
+                }
+            };
+
+            // Configure port
+            port.set_flow_control(serialport::FlowControl::None).ok();
+            port.set_data_bits(serialport::DataBits::Eight).ok();
+            port.set_parity(serialport::Parity::None).ok();
+            port.set_stop_bits(serialport::StopBits::One).ok();
+            port.clear(serialport::ClearBuffer::All).ok();
+
+            // Sample data for this baud rate
+            let sample_start = Instant::now();
+            let mut all_bytes: Vec<u8> = Vec::new();
+            let mut buffer = [0u8; 256];
+
+            while sample_start.elapsed() < Duration::from_secs(self.args.timeout) {
+                if !self.running.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                match port.read(&mut buffer) {
+                    Ok(n) if n > 0 => {
+                        all_bytes.extend_from_slice(&buffer[..n]);
+                        self.stats.bytes_processed += n;
+                    }
+                    _ => {}
+                }
+
+                // Check if we have enough data to analyze
+                if all_bytes.len() >= 50 {
+                    break;
+                }
+            }
+
+            if all_bytes.is_empty() {
+                println!("{}", "No data".yellow());
+                continue;
+            }
+
+            // Analyze the collected bytes
+            let score = self.calculate_readability_score(&all_bytes);
+            let preview = self.get_preview(&all_bytes);
+
+            if !self.args.quiet {
+                print!("[{}] ", preview);
+            }
+
+            if score >= 60 {
+                println!("{} (score: {}%)", "MATCH!".green().bold(), score);
+                self.stats.detection_time = start_time.elapsed();
+                return Ok(baudrate);
+            } else {
+                println!("{} (score: {}%)", "low".dimmed(), score);
             }
         }
 
         self.stats.detection_time = start_time.elapsed();
-        Ok(rates[self.current_baudrate_index])
+        Err("Could not detect baud rate - no readable output found".into())
+    }
+
+    fn calculate_readability_score(&self, data: &[u8]) -> u32 {
+        if data.is_empty() {
+            return 0;
+        }
+
+        let mut printable = 0;
+        let mut alphanumeric = 0;
+        let mut common_chars = 0; // space, newline, common punctuation
+
+        for &byte in data {
+            let c = byte as char;
+            
+            if byte >= 0x20 && byte <= 0x7E {
+                printable += 1;
+            }
+            if c.is_ascii_alphanumeric() {
+                alphanumeric += 1;
+            }
+            if matches!(byte, b' ' | b'\n' | b'\r' | b'.' | b':' | b'-' | b'=' | b'[' | b']') {
+                common_chars += 1;
+            }
+        }
+
+        let total = data.len() as f32;
+        let printable_ratio = printable as f32 / total;
+        let alpha_ratio = alphanumeric as f32 / total;
+        let common_ratio = common_chars as f32 / total;
+
+        // Score: weighted combination
+        // High printable ratio is most important
+        // Some alphanumeric content expected
+        // Common formatting chars (spaces, newlines) indicate structure
+        let score = (printable_ratio * 50.0) + (alpha_ratio * 30.0) + (common_ratio * 20.0);
+        
+        (score.min(100.0)) as u32
+    }
+
+    fn get_preview(&self, data: &[u8]) -> String {
+        let preview: String = data.iter()
+            .take(30)
+            .map(|&b| {
+                if b >= 0x20 && b <= 0x7E {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+        preview
     }
 
     fn save_minicom_config(&self, baudrate: u32, name: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -314,18 +357,23 @@ impl baudowl {
             return Ok(());
         }
 
-        let detected_rate = self.detect_baudrate()?;
-        
-        println!(
-            "\n{} {} {}",
-            "🐕 WOOF!".bold().yellow(),
-            "Detected baudrate:".bright_green(),
-            detected_rate.to_string().bold()
-        );
+        match self.detect_baudrate() {
+            Ok(detected_rate) => {
+                println!(
+                    "\n{} {} {}",
+                    "🦉 HOOT!".bold().yellow(),
+                    "Detected baudrate:".bright_green(),
+                    detected_rate.to_string().bold()
+                );
 
-        if let Some(name) = &self.args.name {
-            self.save_minicom_config(detected_rate, name)?;
-            self.launch_minicom(name)?;
+                if let Some(name) = &self.args.name.clone() {
+                    self.save_minicom_config(detected_rate, name)?;
+                    self.launch_minicom(name)?;
+                }
+            }
+            Err(e) => {
+                println!("\n{} {}", "Detection failed:".red().bold(), e);
+            }
         }
 
         self.print_stats();
@@ -335,6 +383,12 @@ impl baudowl {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let mut hound = baudowl::new(args);
+    let mut hound = match BaudOwl::new(args) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{} {}", "Error:".red().bold(), e);
+            std::process::exit(1);
+        }
+    };
     hound.run()
 }

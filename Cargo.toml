@@ -1,7 +1,7 @@
 [package]
 name = "baudowl"
-version = "1.0"
-edition = "2025"
+version = "1.0.0"
+edition = "2021"
 authors = ["IoTSRG Team"]
 description = "The Ultimate Serial Port Detective"
 license = "MIT"

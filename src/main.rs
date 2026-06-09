@@ -8,10 +8,12 @@ use std::{
     time::{Duration, Instant},
 };
 use clap::Parser;
-use ctrlc;
 use colored::*;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+mod session;
+mod autoroot;
 
 /// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
@@ -49,9 +51,47 @@ fn validate_port_path(port: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// System-wide minicom profile path. `minicom <name>` reads this directly.
+fn system_minicom_path(name: &str) -> PathBuf {
+    PathBuf::from(format!("/etc/minicom/minirc.{}", name))
+}
+
+/// Per-user minicom profile path. `minicom <name>` also reads
+/// `$HOME/.minirc.<name>`, so this works as a fallback when the system path is
+/// not writable.
+fn user_minicom_path(home: &Path, name: &str) -> PathBuf {
+    home.join(format!(".minirc.{}", name))
+}
+
+/// Resolve the user's home directory from `$HOME` (unset or empty -> None).
+fn home_dir() -> Option<PathBuf> {
+    match std::env::var_os("HOME") {
+        Some(h) if !h.is_empty() => Some(PathBuf::from(h)),
+        _ => None,
+    }
+}
+
+/// Whether a failed write to the system path should trigger the user-dir
+/// fallback (no permission, or a missing path we could not create) rather than
+/// being treated as a hard error.
+fn should_fall_back(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::PermissionDenied | io::ErrorKind::NotFound
+    )
+}
+
+/// Write `contents` to `path`, creating the parent directory if it is missing.
+fn write_config_to(path: &Path, contents: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, contents)
+}
+
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.1
+    (o o)   BAUDOWL v1.2
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -74,8 +114,8 @@ struct Args {
     #[arg(short, long, default_value_t = 5)]
     timeout: u64,
 
-    /// Set minimum ASCII character threshold
-    #[arg(short, long, default_value_t = 25)]
+    /// Minimum readability score (0-100) required to accept a baudrate
+    #[arg(short = 'c', long, default_value_t = 60)]
     threshold: usize,
 
     /// Save config as <name> and invoke Minicom (implies --auto)
@@ -95,12 +135,48 @@ struct Args {
     quiet: bool,
 
     /// Enable turbo mode (faster detection)
-    #[arg(short, long)]
+    #[arg(long)]
     turbo: bool,
 
     /// Enable ultra-high baudrates (1Mbps+)
     #[arg(long)]
     highspeed: bool,
+
+    /// Force a specific baudrate and skip auto-detection (e.g. --baud 115200)
+    #[arg(long)]
+    baud: Option<u32>,
+
+    /// Break into U-Boot, inject shell bootargs, and drop to a root shell
+    #[arg(long)]
+    autoroot: bool,
+
+    /// Boot argument injected to obtain a shell
+    #[arg(long, default_value = "init=/bin/sh")]
+    shell_arg: String,
+
+    /// Key spammed to interrupt autoboot: enter|space|ctrl-c|esc|\xNN
+    #[arg(long, default_value = "enter")]
+    interrupt_key: String,
+
+    /// Seconds to spam the interrupt key while waiting for a bootloader prompt
+    #[arg(long, default_value_t = 30)]
+    break_timeout: u64,
+
+    /// Also append the 'single' (single-user) boot flag
+    #[arg(long)]
+    single: bool,
+
+    /// U-Boot command used to continue booting after setenv
+    #[arg(long, default_value = "boot")]
+    boot_cmd: String,
+
+    /// Persist the modified env to flash with saveenv (DANGEROUS, default off)
+    #[arg(long)]
+    persist: bool,
+
+    /// Show the exact commands that would be sent, but do not modify or boot
+    #[arg(long)]
+    dry_run: bool,
 }
 
 struct BaudOwl {
@@ -245,7 +321,7 @@ impl BaudOwl {
                 print!("[{}] ", preview);
             }
 
-            if score >= 60 {
+            if score >= self.args.threshold as u32 {
                 println!("{} (score: {}%)", "MATCH!".green().bold(), score);
                 self.stats.detection_time = start_time.elapsed();
                 return Ok(baudrate);
@@ -270,7 +346,7 @@ impl BaudOwl {
         for &byte in data {
             let c = byte as char;
             
-            if byte >= 0x20 && byte <= 0x7E {
+            if (0x20..=0x7E).contains(&byte) {
                 printable += 1;
             }
             if c.is_ascii_alphanumeric() {
@@ -299,7 +375,7 @@ impl BaudOwl {
         let preview: String = data.iter()
             .take(30)
             .map(|&b| {
-                if b >= 0x20 && b <= 0x7E {
+                if (0x20..=0x7E).contains(&b) {
                     b as char
                 } else {
                     '.'
@@ -323,10 +399,77 @@ impl BaudOwl {
             self.args.port, baudrate
         );
 
-        let config_path = format!("/etc/minicom/minirc.{}", name);
-        std::fs::write(&config_path, config)?;
-        println!("{}", format!("Configuration saved to {}", config_path).green());
-        Ok(())
+        // 1. Try the system-wide path first. `minicom <name>` reads it directly.
+        let system_path = system_minicom_path(name);
+        let system_err = match write_config_to(&system_path, &config) {
+            Ok(()) => {
+                println!(
+                    "{}",
+                    format!("Configuration saved to {}", system_path.display()).green()
+                );
+                println!("Launch it with: {}", format!("minicom {}", name).bold());
+                return Ok(());
+            }
+            // 2. Only permission / missing-path errors warrant a fallback;
+            //    anything else is a real failure we should not paper over.
+            Err(e) if should_fall_back(&e) => e,
+            Err(e) => {
+                return Err(format!(
+                    "failed to write minicom config to {}: {}",
+                    system_path.display(),
+                    e
+                )
+                .into());
+            }
+        };
+
+        // 3. Fall back to the user-writable path. `minicom <name>` also reads
+        //    $HOME/.minirc.<name>, so the same launch command still works.
+        let home = home_dir().ok_or_else(|| {
+            format!(
+                "cannot write minicom config: {} not writable ({}) and $HOME is unset for a fallback",
+                system_path.display(),
+                system_err
+            )
+        })?;
+        let user_path = user_minicom_path(&home, name);
+        match write_config_to(&user_path, &config) {
+            Ok(()) => {
+                println!(
+                    "{}",
+                    format!(
+                        "{} not writable ({}); saved to {} instead",
+                        system_path.display(),
+                        system_err,
+                        user_path.display()
+                    )
+                    .yellow()
+                );
+                println!(
+                    "Launch it with: {}   (minicom reads $HOME/.minirc.{} too)",
+                    format!("minicom {}", name).bold(),
+                    name
+                );
+                println!(
+                    "{}",
+                    format!(
+                        "For a system-wide profile under /etc/minicom, re-run as root: sudo baudowl -n {} ...",
+                        name
+                    )
+                    .dimmed()
+                );
+                Ok(())
+            }
+            // 4. Both locations failed: surface one clear, actionable error.
+            Err(e) => Err(format!(
+                "could not write minicom config to {} ({}) or {} ({})",
+                system_path.display(),
+                system_err,
+                user_path.display(),
+                e
+            )
+            .into()),
+        }
     }
 
     fn launch_minicom(&self, name: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -351,29 +494,81 @@ impl BaudOwl {
 
     fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", BANNER.bright_cyan());
-        
+
         if self.args.baudlist {
             self.print_baudrates();
             return Ok(());
         }
 
-        match self.detect_baudrate() {
-            Ok(detected_rate) => {
+        // Determine the baudrate: forced via --baud, otherwise auto-detect.
+        // --auto forces a scan even when --baud is supplied.
+        let baud = if let Some(b) = self.args.baud {
+            if self.args.auto {
+                println!("{}", "--auto set: scanning despite --baud".dimmed());
+                match self.detect_baudrate() {
+                    Ok(r) => r,
+                    Err(e) => {
+                        println!("\n{} {}", "Detection failed:".red().bold(), e);
+                        self.print_stats();
+                        return Ok(());
+                    }
+                }
+            } else {
                 println!(
-                    "\n{} {} {}",
-                    "🦉 HOOT!".bold().yellow(),
-                    "Detected baudrate:".bright_green(),
-                    detected_rate.to_string().bold()
+                    "{} {}",
+                    "Using forced baudrate:".bright_green(),
+                    b.to_string().bold()
                 );
-
-                if let Some(name) = &self.args.name.clone() {
-                    self.save_minicom_config(detected_rate, name)?;
-                    self.launch_minicom(name)?;
+                b
+            }
+        } else {
+            match self.detect_baudrate() {
+                Ok(r) => {
+                    println!(
+                        "\n{} {} {}",
+                        "🦉 HOOT!".bold().yellow(),
+                        "Detected baudrate:".bright_green(),
+                        r.to_string().bold()
+                    );
+                    r
+                }
+                Err(e) => {
+                    println!("\n{} {}", "Detection failed:".red().bold(), e);
+                    self.print_stats();
+                    return Ok(());
                 }
             }
-            Err(e) => {
-                println!("\n{} {}", "Detection failed:".red().bold(), e);
+        };
+
+        // Autoroot path: break into U-Boot and enable a shell.
+        if self.args.autoroot {
+            let interrupt_key = match autoroot::parse_interrupt_key(&self.args.interrupt_key) {
+                Ok(k) => k,
+                Err(e) => {
+                    eprintln!("{} {}", "Invalid --interrupt-key:".red().bold(), e);
+                    return Ok(());
+                }
+            };
+            let opts = autoroot::AutoRootOpts {
+                shell_arg: self.args.shell_arg.clone(),
+                interrupt_key,
+                break_timeout: Duration::from_secs(self.args.break_timeout),
+                single: self.args.single,
+                boot_cmd: self.args.boot_cmd.clone(),
+                persist: self.args.persist,
+                dry_run: self.args.dry_run,
+                extra_prompts: Vec::new(),
+            };
+            if let Err(e) = autoroot::run(&self.args.port, baud, &opts, self.running.clone()) {
+                println!("\n{} {}", "Autoroot failed:".red().bold(), e);
             }
+            return Ok(());
+        }
+
+        // Default path: save and launch a minicom profile if a name was given.
+        if let Some(name) = &self.args.name.clone() {
+            self.save_minicom_config(baud, name)?;
+            self.launch_minicom(name)?;
         }
 
         self.print_stats();
@@ -391,4 +586,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     hound.run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_path_is_under_etc_minicom() {
+        assert_eq!(
+            system_minicom_path("rk3399"),
+            PathBuf::from("/etc/minicom/minirc.rk3399")
+        );
+    }
+
+    #[test]
+    fn user_path_joins_home_with_dot_minirc() {
+        assert_eq!(
+            user_minicom_path(Path::new("/home/tester"), "rk3399"),
+            PathBuf::from("/home/tester/.minirc.rk3399")
+        );
+    }
+
+    #[test]
+    fn fallback_only_on_permission_or_not_found() {
+        assert!(should_fall_back(&io::Error::from(io::ErrorKind::PermissionDenied)));
+        assert!(should_fall_back(&io::Error::from(io::ErrorKind::NotFound)));
+        assert!(!should_fall_back(&io::Error::from(io::ErrorKind::AlreadyExists)));
+        assert!(!should_fall_back(&io::Error::from(io::ErrorKind::Other)));
+    }
 }

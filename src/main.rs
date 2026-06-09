@@ -103,7 +103,7 @@ const BANNER: &str = r#"
     version,
     about = "baudowl - The Ultimate Serial Port Detective",
     long_about = None,
-    after_help = "Examples:\n  baudowl -p /dev/ttyACM0 --highspeed\n  baudowl --turbo -q\n  baudowl -n myconfig --auto"
+    after_help = "Examples:\n  baudowl -p /dev/ttyACM0 --highspeed\n  baudowl --turbo -q\n  baudowl -n myconfig --auto\n  baudowl --baud 115200 --autoroot --dry-run"
 )]
 struct Args {
     /// Specify serial port to use

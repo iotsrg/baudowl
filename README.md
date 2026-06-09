@@ -7,7 +7,7 @@
 
 ```
     )___(
-    (o o)   BaudOwl v1.4
+    (o o)   BaudOwl v1.5
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -23,7 +23,8 @@
 - 🤖 Expect-style scripting, default-credential testing, secret harvesting
 - 🔌 DTR/RTS auto-reset, serial BREAK, and glitch-trigger coordination
 - ⏱️ Timing side-channel attack and leakage assessment on console checks
-- 🐛 Serial fuzzer with crash oracle, auto-reset, and repro minimization
+- 🐛 Serial fuzzer (raw or protocol-aware) with crash oracle, auto-reset, and repro minimization
+- 🕵️ Passive sniffing, replay, and a MITM bridge with in-transit byte rewrite
 - 📊 Real-time detection statistics
 - 🔧 Minicom configuration generator
 - 🎨 Colorful and readable terminal output
@@ -231,12 +232,28 @@ baudowl --baud 115200 --fuzz --fuzz-maxlen 256 --fuzz-iterations 5000 \
         --fuzz-reset dtr --fuzz-seed 1
 ```
 
-Crashes are matched by signature (kernel panic, data abort, watchdog, and more; add your own with `--fuzz-crash-sig`). Reset between crashes via `--fuzz-reset dtr|rts|cmd|none`. Runs are reproducible from `--fuzz-seed`, and each crashing input is reduced by delta debugging.
+Crashes are matched by signature (kernel panic, data abort, watchdog, and more; add your own with `--fuzz-crash-sig`). Reset between crashes via `--fuzz-reset dtr|rts|cmd|none`. Runs are reproducible from `--fuzz-seed`, and each crashing input is reduced by delta debugging. Use `--fuzz-protocol modbus|nmea` for structure-aware cases (valid frames with field corruption) instead of raw bytes.
+
+### Interception
+
+Sit on the line passively, or inline between two endpoints.
+
+```bash
+# Passive read-only capture: timestamps, frame splitting, protocol decode
+baudowl --baud 9600 --sniff --sniff-decode --sniff-out capture.bin
+
+# Replay a captured or crafted byte log back out the port
+baudowl --baud 9600 --replay capture.bin
+
+# Man-in-the-middle: bridge two ports and rewrite bytes in transit
+baudowl --baud 115200 --port /dev/ttyUSB0 --mitm --mitm-port-b /dev/ttyUSB1 \
+        --mitm-rule "a2b:deadbeef:cafebabe"
+```
 
 ### Verification status
 
-- **Unit-tested logic (40 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, script parser, secret patterns, sigrok baud math, mmc block addressing, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization.
-- **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test, timing attack (secret recovered char-by-char), fuzzer (crash found and minimized to the trigger byte).
+- **Unit-tested logic (48 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, script parser, secret patterns, sigrok baud math, mmc block addressing, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting.
+- **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test, timing attack (secret recovered char-by-char), fuzzer (crash found and minimized to the trigger byte), passive sniff (capture and protocol decode), MITM bridge (forward and rewrite in transit).
 - **Code-complete, needs real hardware to verify:** DTR/RTS reset, serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.
 
 ---
@@ -247,7 +264,7 @@ Baudrate detection:
 
 ```text
     )___(
-    (o o)   BAUDOWL v1.4
+    (o o)   BAUDOWL v1.5
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!

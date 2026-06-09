@@ -83,6 +83,56 @@ pub fn mutate(seed: &[u8], prng: &mut Prng, max_len: usize) -> Vec<u8> {
     out
 }
 
+/// Protocol shape for structure-aware case generation.
+#[derive(Clone, Copy)]
+pub enum Proto {
+    Raw,
+    Modbus,
+    Nmea,
+}
+
+impl Proto {
+    pub fn parse(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "modbus" => Self::Modbus,
+            "nmea" => Self::Nmea,
+            _ => Self::Raw,
+        }
+    }
+}
+
+/// Generate a protocol-shaped case: a valid frame, sometimes field-corrupted,
+/// to exercise a parser's structure handling instead of pure random bytes.
+pub fn gen_protocol_case(proto: Proto, prng: &mut Prng, max_len: usize) -> Vec<u8> {
+    match proto {
+        Proto::Raw => gen_case(prng, max_len),
+        Proto::Modbus => {
+            let addr = (prng.below(247) + 1) as u8;
+            let funcs = [0x01u8, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0f, 0x10];
+            let func = funcs[prng.below(funcs.len())];
+            let dlen = prng.below(8);
+            let data: Vec<u8> = (0..dlen).map(|_| prng.byte()).collect();
+            let mut f = crate::framing::modbus_frame(addr, func, &data);
+            if prng.below(2) == 0 && !f.is_empty() {
+                let i = prng.below(f.len());
+                f[i] = f[i].wrapping_add(1 + prng.byte());
+            }
+            f
+        }
+        Proto::Nmea => {
+            const SET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ,.-";
+            let n = prng.below(40) + 4;
+            let body: String = (0..n).map(|_| SET[prng.below(SET.len())] as char).collect();
+            let mut s = crate::framing::nmea_sentence(&format!("GP{}", body)).into_bytes();
+            if prng.below(2) == 0 && !s.is_empty() {
+                let i = prng.below(s.len());
+                s[i] = s[i].wrapping_add(1);
+            }
+            s
+        }
+    }
+}
+
 /// Default substrings that indicate a target crashed/reset.
 pub fn default_crash_signatures() -> Vec<String> {
     [
@@ -177,6 +227,7 @@ pub struct FuzzOpts {
     pub reset_cmd: Option<String>,
     pub seed: u64,
     pub newline: bool,
+    pub proto: Proto,
 }
 
 fn send_and_crashed(
@@ -246,10 +297,10 @@ pub fn run_fuzz(
         if !running.load(Ordering::SeqCst) {
             break;
         }
-        let case = if opts.seed_input.is_empty() {
-            gen_case(&mut prng, opts.max_len)
-        } else {
+        let case = if !opts.seed_input.is_empty() {
             mutate(&opts.seed_input, &mut prng, opts.max_len)
+        } else {
+            gen_protocol_case(opts.proto, &mut prng, opts.max_len)
         };
         if send_and_crashed(&mut s, &case, opts.newline, opts.response_timeout, &opts.crash_sigs) {
             println!(
@@ -324,6 +375,19 @@ mod tests {
         let input: Vec<u8> = (0..40).collect();
         let out = minimize(&input, |c| c.len() >= 8);
         assert_eq!(out.len(), 8);
+    }
+
+    #[test]
+    fn protocol_gen_modbus_is_framed() {
+        let mut prng = Prng::new(3);
+        let mut any_valid = false;
+        for _ in 0..20 {
+            let c = gen_protocol_case(Proto::Modbus, &mut prng, 32);
+            if crate::framing::detect_protocol(&c) == Some("Modbus RTU") {
+                any_valid = true;
+            }
+        }
+        assert!(any_valid);
     }
 
     #[test]

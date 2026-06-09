@@ -27,7 +27,7 @@
 
 ### Prerequisites
 
-- **Rust** (version ≥ 1.70) - [Install via rustup](https://rustup.rs)
+- **Rust** (version ≥ 1.74) - [Install via rustup](https://rustup.rs)
 - **Linux Packages**:
   ```bash
   sudo apt install libudev-dev pkg-config

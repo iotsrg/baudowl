@@ -36,7 +36,7 @@ pub struct AutoRootOpts {
 }
 
 /// Bootloader prompts that indicate we have broken into a console.
-fn default_prompts() -> Vec<String> {
+pub fn default_prompts() -> Vec<String> {
     [
         "=> ", "u-boot>", "uboot>", "cfe>", "redboot>", "ar7240>", "ath>", "rlx>",
         "marvell>>", "bcm>", "(ipq) #", "boot>",
@@ -55,6 +55,50 @@ fn shell_prompts() -> Vec<String> {
     .iter()
     .map(|s| s.to_string())
     .collect()
+}
+
+/// Boot-argument payloads that drop a device to a root shell, selectable by
+/// name via `--shell-arg <name>`. Ordered most-reliable first (replace init,
+/// no auth), then single-user / systemd targets that may prompt for a password.
+/// (name, boot argument, note)
+pub const SHELL_PRESETS: &[(&str, &str, &str)] = &[
+    ("sh", "init=/bin/sh", "replace init with /bin/sh (most common, no auth; covers BusyBox /bin/sh)"),
+    ("bash", "init=/bin/bash", "replace init with /bin/bash if present (no auth)"),
+    ("sbin-sh", "init=/sbin/sh", "init at /sbin/sh on some embedded layouts (no auth)"),
+    ("ash", "init=/bin/ash", "BusyBox ash where /bin/ash exists (no auth)"),
+    ("rdinit", "rdinit=/bin/sh", "initramfs/initrd: shell before the real root pivots (no auth)"),
+    ("single", "single", "single-user mode (may prompt for the root password)"),
+    ("s", "S", "single-user, sysvinit style (may prompt for the root password)"),
+    ("rescue", "systemd.unit=rescue.target", "systemd rescue target (usually prompts for the root password)"),
+    ("emergency", "systemd.unit=emergency.target", "systemd emergency target (usually prompts for the root password)"),
+];
+
+/// Resolve a `--shell-arg` value: a preset name maps to its boot argument,
+/// anything else is used verbatim as a raw boot argument.
+pub fn resolve_shell_arg(input: &str) -> String {
+    let key = input.trim();
+    for (name, arg, _) in SHELL_PRESETS {
+        if key.eq_ignore_ascii_case(name) {
+            return (*arg).to_string();
+        }
+    }
+    key.to_string()
+}
+
+/// Print the shell boot-argument presets table.
+pub fn print_presets() {
+    println!(
+        "{}",
+        "Shell boot-argument presets (use with --shell-arg <name>):".bold().green()
+    );
+    for (name, arg, note) in SHELL_PRESETS {
+        println!("  {:<11} {:<34} {}", name, arg, note);
+    }
+    println!();
+    println!("Any other --shell-arg value is used verbatim, e.g.");
+    println!("  --shell-arg \"init=/bin/sh rw console=ttyS0,115200\"");
+    println!("Add --single to also append the 'single' flag. Existing init=/rdinit= and");
+    println!("quiet/splash tokens are handled automatically.");
 }
 
 /// Parse a user-supplied interrupt key spec into raw bytes.
@@ -367,5 +411,28 @@ mod tests {
     fn bootargs_no_duplicate_single() {
         let got = build_shell_bootargs("console=ttyS0 single", "init=/bin/sh", true);
         assert_eq!(got, "console=ttyS0 init=/bin/sh single");
+    }
+
+    #[test]
+    fn shell_arg_presets_resolve() {
+        assert_eq!(resolve_shell_arg("sh"), "init=/bin/sh");
+        assert_eq!(resolve_shell_arg("RDINIT"), "rdinit=/bin/sh");
+        assert_eq!(resolve_shell_arg("rescue"), "systemd.unit=rescue.target");
+        assert_eq!(resolve_shell_arg("init=/bin/custom"), "init=/bin/custom");
+        assert_eq!(resolve_shell_arg("  single  "), "single");
+    }
+
+    #[test]
+    fn bootargs_rdinit_keeps_existing_init() {
+        let old = "console=ttyS0 root=/dev/mtdblock2 init=/sbin/init";
+        let got = build_shell_bootargs(old, "rdinit=/bin/sh", false);
+        assert_eq!(got, "console=ttyS0 root=/dev/mtdblock2 init=/sbin/init rdinit=/bin/sh");
+    }
+
+    #[test]
+    fn bootargs_systemd_unit_replaces_existing() {
+        let old = "console=ttyS0 systemd.unit=multi-user.target";
+        let got = build_shell_bootargs(old, "systemd.unit=rescue.target", false);
+        assert_eq!(got, "console=ttyS0 systemd.unit=rescue.target");
     }
 }

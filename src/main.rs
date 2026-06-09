@@ -21,6 +21,8 @@ mod recon;
 mod reset;
 mod glitch;
 mod sigrok;
+mod timing;
+mod fuzz;
 
 /// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
@@ -127,7 +129,7 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
 
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.3
+    (o o)   BAUDOWL v1.4
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -338,6 +340,92 @@ struct Args {
     /// sigrok channel carrying RX
     #[arg(long, default_value = "D0")]
     sigrok_channel: String,
+
+    // --- Timing side-channel ---
+    /// Recover a secret char-by-char by timing a non-constant-time console check
+    #[arg(long)]
+    timing_attack: bool,
+
+    /// Character set to try per position
+    #[arg(long, default_value = "abcdefghijklmnopqrstuvwxyz0123456789")]
+    timing_charset: String,
+
+    /// Maximum secret length to recover
+    #[arg(long, default_value_t = 16)]
+    timing_maxlen: usize,
+
+    /// Timing samples per candidate character
+    #[arg(long, default_value_t = 20)]
+    timing_samples: usize,
+
+    /// Response marker to time against (e.g. the rejection message)
+    #[arg(long, default_value = "incorrect")]
+    timing_marker: String,
+
+    /// Text sent before each guess (to navigate to the input)
+    #[arg(long, default_value = "")]
+    timing_prefix: String,
+
+    /// Outlier separation threshold (sigmas) to accept a character
+    #[arg(long, default_value_t = 3.5)]
+    timing_z: f64,
+
+    /// Settle time between timing samples (ms)
+    #[arg(long, default_value_t = 20)]
+    timing_settle_ms: u64,
+
+    /// TVLA-lite leakage test between --timing-class-a and --timing-class-b
+    #[arg(long)]
+    leakage_test: bool,
+
+    /// Input class A for --leakage-test
+    #[arg(long, default_value = "")]
+    timing_class_a: String,
+
+    /// Input class B for --leakage-test
+    #[arg(long, default_value = "")]
+    timing_class_b: String,
+
+    // --- Serial fuzzer ---
+    /// Fuzz a console/parser, detect crashes, auto-reset, and minimize the repro
+    #[arg(long)]
+    fuzz: bool,
+
+    /// Seed input to mutate (text). Omit for fully random cases
+    #[arg(long)]
+    fuzz_seed_input: Option<String>,
+
+    /// Maximum fuzz case length
+    #[arg(long, default_value_t = 64)]
+    fuzz_maxlen: usize,
+
+    /// Number of fuzz iterations
+    #[arg(long, default_value_t = 200)]
+    fuzz_iterations: usize,
+
+    /// Per-case response window (ms)
+    #[arg(long, default_value_t = 800)]
+    fuzz_timeout_ms: u64,
+
+    /// Reset method between/after crashes: dtr|rts|cmd|none
+    #[arg(long, default_value = "dtr")]
+    fuzz_reset: String,
+
+    /// Command to send for --fuzz-reset cmd
+    #[arg(long)]
+    fuzz_reset_cmd: Option<String>,
+
+    /// PRNG seed for reproducible fuzzing
+    #[arg(long, default_value_t = 1)]
+    fuzz_seed: u64,
+
+    /// Do not append CR after each fuzz case
+    #[arg(long)]
+    fuzz_no_newline: bool,
+
+    /// Extra crash signature(s) to match (repeatable)
+    #[arg(long)]
+    fuzz_crash_sig: Vec<String>,
 }
 
 struct BaudOwl {
@@ -876,6 +964,71 @@ impl BaudOwl {
                 glitch::watch_and_trigger(&self.args.port, baud, &opts, self.running.clone())
             {
                 println!("\n{} {}", "Glitch watch failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        // Timing side-channel attack (recover a secret by response timing).
+        if self.args.timing_attack {
+            let opts = timing::TimingOpts {
+                charset: self.args.timing_charset.bytes().collect(),
+                max_len: self.args.timing_maxlen,
+                samples: self.args.timing_samples,
+                marker: self.args.timing_marker.clone(),
+                prefix: self.args.timing_prefix.clone(),
+                z: self.args.timing_z,
+                settle: Duration::from_millis(self.args.timing_settle_ms),
+            };
+            if let Err(e) = timing::timing_attack(&self.args.port, baud, &opts, self.running.clone())
+            {
+                println!("\n{} {}", "Timing attack failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        if self.args.leakage_test {
+            if let Err(e) = timing::leakage_test(
+                &self.args.port,
+                baud,
+                &self.args.timing_class_a,
+                &self.args.timing_class_b,
+                self.args.timing_samples,
+                &self.args.timing_marker,
+                self.running.clone(),
+            ) {
+                println!("\n{} {}", "Leakage test failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        // Serial fuzzer with crash oracle, auto-reset, and minimization.
+        if self.args.fuzz {
+            let seed_input = self
+                .args
+                .fuzz_seed_input
+                .clone()
+                .unwrap_or_default()
+                .into_bytes();
+            let crash_sigs = if self.args.fuzz_crash_sig.is_empty() {
+                fuzz::default_crash_signatures()
+            } else {
+                let mut s = fuzz::default_crash_signatures();
+                s.extend(self.args.fuzz_crash_sig.iter().cloned());
+                s
+            };
+            let opts = fuzz::FuzzOpts {
+                seed_input,
+                max_len: self.args.fuzz_maxlen,
+                iterations: self.args.fuzz_iterations,
+                response_timeout: Duration::from_millis(self.args.fuzz_timeout_ms),
+                crash_sigs,
+                reset: fuzz::ResetMode::parse(&self.args.fuzz_reset),
+                reset_cmd: self.args.fuzz_reset_cmd.clone(),
+                seed: self.args.fuzz_seed,
+                newline: !self.args.fuzz_no_newline,
+            };
+            if let Err(e) = fuzz::run_fuzz(&self.args.port, baud, &opts, self.running.clone()) {
+                println!("\n{} {}", "Fuzz failed:".red().bold(), e);
             }
             return Ok(());
         }

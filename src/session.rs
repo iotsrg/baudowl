@@ -51,6 +51,20 @@ impl Session {
         self.port.flush()
     }
 
+    /// Assert or release the DTR control line.
+    pub fn set_dtr(&mut self, level: bool) -> io::Result<()> {
+        self.port
+            .write_data_terminal_ready(level)
+            .map_err(|e| io::Error::other(e.to_string()))
+    }
+
+    /// Assert or release the RTS control line.
+    pub fn set_rts(&mut self, level: bool) -> io::Result<()> {
+        self.port
+            .write_request_to_send(level)
+            .map_err(|e| io::Error::other(e.to_string()))
+    }
+
     /// Write a command followed by a carriage return (U-Boot line terminator).
     pub fn send_line(&mut self, line: &str) -> io::Result<()> {
         self.port.write_all(line.as_bytes())?;

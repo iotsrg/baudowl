@@ -7,7 +7,7 @@
 
 ```
     )___(
-    (o o)   BaudOwl v1.3
+    (o o)   BaudOwl v1.4
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -22,6 +22,8 @@
 - 🧬 Binary protocol fingerprinting (Modbus/NMEA/MAVLink) and framing autodetect
 - 🤖 Expect-style scripting, default-credential testing, secret harvesting
 - 🔌 DTR/RTS auto-reset, serial BREAK, and glitch-trigger coordination
+- ⏱️ Timing side-channel attack and leakage assessment on console checks
+- 🐛 Serial fuzzer with crash oracle, auto-reset, and repro minimization
 - 📊 Real-time detection statistics
 - 🔧 Minicom configuration generator
 - 🎨 Colorful and readable terminal output
@@ -204,10 +206,37 @@ baudowl --baud 115200 --glitch-on "Verifying" --glitch-line rts \
         --glitch-cmd "./chipwhisperer_glitch.py"
 ```
 
+### Timing side-channel
+
+Recover a secret from a non-constant-time console check, or assess whether a check leaks timing.
+
+```bash
+# Recover a password char-by-char from rejection timing
+baudowl --baud 115200 --timing-attack --timing-marker "incorrect" \
+        --timing-charset "abcdefghijklmnopqrstuvwxyz0123456789" --timing-samples 30
+
+# TVLA-lite: is the check constant-time? (Welch t-test over two input classes)
+baudowl --baud 115200 --leakage-test \
+        --timing-class-a "correctprefix" --timing-class-b "wrongguess"
+```
+
+The per-character delay must exceed UART jitter; raise `--timing-samples` on noisy links.
+
+### Serial fuzzing
+
+Fuzz a console or protocol parser, detect crashes from the serial output, auto-reset, and minimize the crashing input to a deterministic repro.
+
+```bash
+baudowl --baud 115200 --fuzz --fuzz-maxlen 256 --fuzz-iterations 5000 \
+        --fuzz-reset dtr --fuzz-seed 1
+```
+
+Crashes are matched by signature (kernel panic, data abort, watchdog, and more; add your own with `--fuzz-crash-sig`). Reset between crashes via `--fuzz-reset dtr|rts|cmd|none`. Runs are reproducible from `--fuzz-seed`, and each crashing input is reduced by delta debugging.
+
 ### Verification status
 
-- **Unit-tested logic (32 tests):** `md.b` parsing, base64, Modbus CRC16, NMEA checksum, MAVLink framing, script parser, secret patterns, sigrok baud math, mmc block addressing.
-- **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test.
+- **Unit-tested logic (40 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, script parser, secret patterns, sigrok baud math, mmc block addressing, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization.
+- **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test, timing attack (secret recovered char-by-char), fuzzer (crash found and minimized to the trigger byte).
 - **Code-complete, needs real hardware to verify:** DTR/RTS reset, serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.
 
 ---
@@ -218,7 +247,7 @@ Baudrate detection:
 
 ```text
     )___(
-    (o o)   BAUDOWL v1.3
+    (o o)   BAUDOWL v1.4
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!

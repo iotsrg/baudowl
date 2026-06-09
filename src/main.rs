@@ -23,6 +23,8 @@ mod glitch;
 mod sigrok;
 mod timing;
 mod fuzz;
+mod sniff;
+mod mitm;
 
 /// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
@@ -98,6 +100,43 @@ fn write_config_to(path: &Path, contents: &str) -> io::Result<()> {
     std::fs::write(path, contents)
 }
 
+/// Parse a hex byte string ("deadbeef" or "de ad be ef") into bytes.
+fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
+    let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if (clean.len() & 1) != 0 {
+        return Err(format!("hex '{}' must be even length", s));
+    }
+    (0..clean.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&clean[i..i + 2], 16).map_err(|_| format!("bad hex in '{}'", s))
+        })
+        .collect()
+}
+
+/// Parse MITM rule specs of the form DIR:findhex:replacehex.
+fn parse_mitm_rules(specs: &[String]) -> Result<Vec<mitm::Rule>, String> {
+    let mut rules = Vec::new();
+    for spec in specs {
+        let parts: Vec<&str> = spec.split(':').collect();
+        if parts.len() != 3 {
+            return Err(format!("rule '{}' must be DIR:findhex:replacehex", spec));
+        }
+        let dir = match parts[0].to_ascii_lowercase().as_str() {
+            "a2b" => mitm::Dir::AtoB,
+            "b2a" => mitm::Dir::BtoA,
+            "both" => mitm::Dir::Both,
+            other => return Err(format!("bad direction '{}' (a2b|b2a|both)", other)),
+        };
+        rules.push(mitm::Rule {
+            dir,
+            find: parse_hex_bytes(parts[1])?,
+            replace: parse_hex_bytes(parts[2])?,
+        });
+    }
+    Ok(rules)
+}
+
 /// Parse a number that may be hex (0x...) or decimal.
 fn parse_num(s: &str) -> Result<u64, String> {
     let s = s.trim();
@@ -129,7 +168,7 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
 
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.4
+    (o o)   BAUDOWL v1.5
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -426,6 +465,55 @@ struct Args {
     /// Extra crash signature(s) to match (repeatable)
     #[arg(long)]
     fuzz_crash_sig: Vec<String>,
+
+    /// Protocol-aware fuzzing: raw|modbus|nmea
+    #[arg(long, default_value = "raw")]
+    fuzz_protocol: String,
+
+    // --- Passive sniff / replay / MITM ---
+    /// Passively capture the line (read-only), timestamped
+    #[arg(long)]
+    sniff: bool,
+
+    /// Save the raw sniff capture to this file
+    #[arg(long, value_name = "FILE")]
+    sniff_out: Option<String>,
+
+    /// Fingerprint the protocol of the sniffed capture
+    #[arg(long)]
+    sniff_decode: bool,
+
+    /// Idle gap (us) that separates frames in the sniff view
+    #[arg(long, default_value_t = 5000)]
+    sniff_idle_us: u64,
+
+    /// Stop sniffing after this many bytes
+    #[arg(long, default_value_t = 65536)]
+    sniff_max: usize,
+
+    /// Replay the bytes of a file out the port
+    #[arg(long, value_name = "FILE")]
+    replay: Option<String>,
+
+    /// Replay chunk size
+    #[arg(long, default_value_t = 64)]
+    replay_chunk: usize,
+
+    /// Delay between replay chunks (ms)
+    #[arg(long, default_value_t = 10)]
+    replay_delay_ms: u64,
+
+    /// Man-in-the-middle bridge between --port (A) and --mitm-port-b (B)
+    #[arg(long)]
+    mitm: bool,
+
+    /// Second port for --mitm (the host side)
+    #[arg(long, value_name = "PORT")]
+    mitm_port_b: Option<String>,
+
+    /// MITM rewrite rule DIR:findhex:replacehex (DIR = a2b|b2a|both), repeatable
+    #[arg(long, value_name = "RULE")]
+    mitm_rule: Vec<String>,
 }
 
 struct BaudOwl {
@@ -794,6 +882,29 @@ impl BaudOwl {
             return Ok(());
         }
 
+        if self.args.mitm {
+            let port_b = match &self.args.mitm_port_b {
+                Some(p) => p.clone(),
+                None => {
+                    eprintln!("{}", "--mitm requires --mitm-port-b".red().bold());
+                    return Ok(());
+                }
+            };
+            let rules = match parse_mitm_rules(&self.args.mitm_rule) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("{} {}", "Invalid --mitm-rule:".red().bold(), e);
+                    return Ok(());
+                }
+            };
+            if let Err(e) =
+                mitm::mitm(&self.args.port, &port_b, fixed_baud, rules, self.running.clone())
+            {
+                println!("{} {}", "MITM failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
         // Determine the baudrate: forced via --baud, otherwise auto-detect.
         // --auto forces a scan even when --baud is supplied.
         let baud = if let Some(b) = self.args.baud {
@@ -968,6 +1079,34 @@ impl BaudOwl {
             return Ok(());
         }
 
+        // Passive capture (read-only) and replay.
+        if self.args.sniff {
+            let opts = sniff::SniffOpts {
+                out: self.args.sniff_out.clone(),
+                max_bytes: self.args.sniff_max,
+                decode: self.args.sniff_decode,
+                idle_gap_us: self.args.sniff_idle_us,
+            };
+            if let Err(e) = sniff::sniff(&self.args.port, baud, &opts, self.running.clone()) {
+                println!("\n{} {}", "Sniff failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        if let Some(file) = &self.args.replay {
+            if let Err(e) = sniff::replay(
+                &self.args.port,
+                baud,
+                file,
+                self.args.replay_chunk,
+                self.args.replay_delay_ms,
+                self.running.clone(),
+            ) {
+                println!("\n{} {}", "Replay failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
         // Timing side-channel attack (recover a secret by response timing).
         if self.args.timing_attack {
             let opts = timing::TimingOpts {
@@ -1026,6 +1165,7 @@ impl BaudOwl {
                 reset_cmd: self.args.fuzz_reset_cmd.clone(),
                 seed: self.args.fuzz_seed,
                 newline: !self.args.fuzz_no_newline,
+                proto: fuzz::Proto::parse(&self.args.fuzz_protocol),
             };
             if let Err(e) = fuzz::run_fuzz(&self.args.port, baud, &opts, self.running.clone()) {
                 println!("\n{} {}", "Fuzz failed:".red().bold(), e);

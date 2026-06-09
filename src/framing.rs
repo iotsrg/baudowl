@@ -33,6 +33,22 @@ pub fn nmea_checksum(body: &[u8]) -> u8 {
     body.iter().fold(0u8, |a, &b| a ^ b)
 }
 
+/// Build a CRC-valid Modbus RTU frame: addr, func, data, then CRC16 (LE).
+pub fn modbus_frame(addr: u8, func: u8, data: &[u8]) -> Vec<u8> {
+    let mut f = Vec::with_capacity(4 + data.len());
+    f.push(addr);
+    f.push(func);
+    f.extend_from_slice(data);
+    let crc = modbus_crc16(&f);
+    f.extend_from_slice(&crc.to_le_bytes());
+    f
+}
+
+/// Build an NMEA 0183 sentence with a valid `*HH` checksum.
+pub fn nmea_sentence(body: &str) -> String {
+    format!("${}*{:02X}\r\n", body, nmea_checksum(body.as_bytes()))
+}
+
 /// True if a CRC-valid Modbus RTU frame is anchored at the start of `data`.
 fn looks_like_modbus(data: &[u8]) -> bool {
     let max = data.len().min(256);
@@ -252,5 +268,14 @@ mod tests {
     fn printable_score_text_vs_noise() {
         assert!(printable_score(b"hello world\n") > 90);
         assert!(printable_score(&[0x00, 0xff, 0x80, 0x01, 0xfe]) < 30);
+    }
+
+    #[test]
+    fn builds_valid_frames() {
+        let f = modbus_frame(0x01, 0x03, &[0x00, 0x00, 0x00, 0x0a]);
+        assert!(looks_like_modbus(&f));
+        let s = nmea_sentence("GPGGA,123519,4807.038,N");
+        assert!(looks_like_nmea(s.as_bytes()));
+        assert_eq!(detect_protocol(s.as_bytes()), Some("NMEA 0183 (GPS/GNSS)"));
     }
 }

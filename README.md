@@ -7,7 +7,7 @@
 
 ```
     )___(
-    (o o)   BaudOwl v1.2
+    (o o)   BaudOwl v1.3
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -18,6 +18,10 @@
 - ⚡ Turbo mode for fast scanning
 - 🚨 High-speed mode (up to 4,000,000 baud)
 - 🐚 U-Boot autoroot: interrupt autoboot, inject `bootargs`, drop to a root shell
+- 🧲 Firmware extraction over UART (U-Boot `md.b`/flash read, or base64 from a shell)
+- 🧬 Binary protocol fingerprinting (Modbus/NMEA/MAVLink) and framing autodetect
+- 🤖 Expect-style scripting, default-credential testing, secret harvesting
+- 🔌 DTR/RTS auto-reset, serial BREAK, and glitch-trigger coordination
 - 📊 Real-time detection statistics
 - 🔧 Minicom configuration generator
 - 🎨 Colorful and readable terminal output
@@ -140,13 +144,81 @@ Any other value is used verbatim, e.g. `--shell-arg "init=/bin/sh rw console=tty
 
 ---
 
+## Advanced capabilities
+
+All of these run over the same serial line. For lab/authorized use only.
+
+### Firmware extraction
+
+```bash
+# Dump 1 MB of SPI flash to firmware.bin (breaks into U-Boot, then sf read + md.b)
+baudowl --baud 115200 --dump-flash --dump-source sf --dump-offset 0x0 \
+        --dump-length 0x100000 --dump-out firmware.bin
+
+# Dump device RAM directly via md.b
+baudowl --baud 115200 --dump-mem 0x80000000 --dump-length 0x1000 --dump-out ram.bin
+
+# Pull a file from an already-rooted shell (base64 over UART)
+baudowl --baud 115200 --shell-dump /etc/shadow --dump-out shadow.txt
+
+# Patch a byte in memory (for example before bootm)
+baudowl --baud 115200 --write-mem 0x80010000 --write-value 0x90 --write-count 1
+```
+
+`--dump-source` is `sf` (SPI), `nand`, or `mmc`. `mmc` byte offsets are converted to 512-byte block addressing automatically.
+
+### Detection
+
+```bash
+baudowl --baud 9600 --detect-framing     # try 8N1/7E1/7O1/8E1/8O1/8N2/7N1, pick the cleanest
+baudowl --baud 9600 --detect-protocol    # fingerprint Modbus RTU / NMEA / MAVLink
+baudowl --sigrok-driver fx2lafw --sigrok-samplerate 8000000   # logic-analyzer auto-baud
+```
+
+### Automation
+
+```bash
+baudowl --baud 115200 --script flow.txt              # run an expect-style script
+baudowl --baud 115200 --cred-brute                   # try default console credentials
+baudowl --baud 115200 --harvest --dump-out loot.txt  # scrape secrets from a root shell
+```
+
+Script DSL (one command per line, `#` for comments):
+
+```
+send <text>            send text plus CR (escapes: \n \r \t \xNN)
+sendraw <hex>          send raw bytes, e.g. sendraw de ad be ef
+expect [secs] <pat>    wait for a substring (default 10s)
+delay <ms>             read/drain for a fixed time
+log <message>          print a line
+```
+
+### Hardware triggering
+
+```bash
+baudowl --port /dev/ttyUSB0 --reset esp                 # DTR/RTS reset: dtr|rts|esp
+baudowl --port /dev/ttyUSB0 --send-break --break-ms 300 # timed serial BREAK (Unix)
+
+# Fire a trigger (RTS/DTR pulse and/or a command) when a boot marker appears
+baudowl --baud 115200 --glitch-on "Verifying" --glitch-line rts \
+        --glitch-cmd "./chipwhisperer_glitch.py"
+```
+
+### Verification status
+
+- **Unit-tested logic (32 tests):** `md.b` parsing, base64, Modbus CRC16, NMEA checksum, MAVLink framing, script parser, secret patterns, sigrok baud math, mmc block addressing.
+- **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test.
+- **Code-complete, needs real hardware to verify:** DTR/RTS reset, serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.
+
+---
+
 ## Example Output
 
 Baudrate detection:
 
 ```text
     )___(
-    (o o)   BAUDOWL v1.2
+    (o o)   BAUDOWL v1.3
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!

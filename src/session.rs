@@ -45,6 +45,12 @@ impl Session {
         self.running.load(Ordering::SeqCst)
     }
 
+    /// Write raw bytes and flush (no line terminator added).
+    pub fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.port.write_all(bytes)?;
+        self.port.flush()
+    }
+
     /// Write a command followed by a carriage return (U-Boot line terminator).
     pub fn send_line(&mut self, line: &str) -> io::Result<()> {
         self.port.write_all(line.as_bytes())?;

@@ -14,6 +14,13 @@ use std::path::{Path, PathBuf};
 
 mod session;
 mod autoroot;
+mod uboot;
+mod framing;
+mod script;
+mod recon;
+mod reset;
+mod glitch;
+mod sigrok;
 
 /// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
@@ -89,9 +96,38 @@ fn write_config_to(path: &Path, contents: &str) -> io::Result<()> {
     std::fs::write(path, contents)
 }
 
+/// Parse a number that may be hex (0x...) or decimal.
+fn parse_num(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(h, 16).map_err(|_| format!("invalid hex number '{}'", s))
+    } else {
+        s.parse::<u64>().map_err(|_| format!("invalid number '{}'", s))
+    }
+}
+
+/// Read up to ~1 KB from the port for `dur`, for protocol fingerprinting.
+fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) -> Vec<u8> {
+    let mut data = Vec::new();
+    if let Ok(mut p) = serialport::new(port, baud)
+        .timeout(Duration::from_millis(100))
+        .open()
+    {
+        p.clear(serialport::ClearBuffer::All).ok();
+        let deadline = Instant::now() + dur;
+        let mut buf = [0u8; 256];
+        while Instant::now() < deadline && running.load(Ordering::SeqCst) && data.len() < 1024 {
+            if let Ok(n) = p.read(&mut buf) {
+                data.extend_from_slice(&buf[..n]);
+            }
+        }
+    }
+    data
+}
+
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.2
+    (o o)   BAUDOWL v1.3
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -181,6 +217,127 @@ struct Args {
     /// List the built-in shell boot-argument presets and exit
     #[arg(long)]
     list_shell_args: bool,
+
+    // --- Firmware extraction (U-Boot / shell) ---
+    /// Dump flash to a file over U-Boot (needs --dump-out, --dump-length)
+    #[arg(long)]
+    dump_flash: bool,
+
+    /// Dump device memory at this hex address over U-Boot md (needs --dump-length)
+    #[arg(long, value_name = "HEXADDR")]
+    dump_mem: Option<String>,
+
+    /// Flash source for --dump-flash: sf|nand|mmc
+    #[arg(long, default_value = "sf")]
+    dump_source: String,
+
+    /// Staging RAM address for flash reads (hex)
+    #[arg(long, default_value = "0x80000000")]
+    dump_ram_addr: String,
+
+    /// Flash byte offset to start dumping (hex or decimal)
+    #[arg(long, default_value = "0x0")]
+    dump_offset: String,
+
+    /// Number of bytes to dump (hex or decimal)
+    #[arg(long, default_value = "0x10000")]
+    dump_length: String,
+
+    /// Bytes per md.b chunk (hex or decimal)
+    #[arg(long, default_value = "0x1000")]
+    dump_chunk: String,
+
+    /// Output file for dumps and harvest transcripts
+    #[arg(long, default_value = "dump.bin")]
+    dump_out: String,
+
+    /// Pull a file from an open root shell via base64 (give the remote path)
+    #[arg(long, value_name = "PATH")]
+    shell_dump: Option<String>,
+
+    /// Write a byte to device memory over U-Boot mw.b (give a hex address)
+    #[arg(long, value_name = "HEXADDR")]
+    write_mem: Option<String>,
+
+    /// Byte value for --write-mem (hex or decimal)
+    #[arg(long, default_value = "0x0")]
+    write_value: String,
+
+    /// Repeat count for --write-mem
+    #[arg(long, default_value = "1")]
+    write_count: String,
+
+    // --- Detection ---
+    /// Try framing combinations (8N1/7E1/...) and report the most readable
+    #[arg(long)]
+    detect_framing: bool,
+
+    /// Sample the line and fingerprint a binary protocol (Modbus/NMEA/MAVLink)
+    #[arg(long)]
+    detect_protocol: bool,
+
+    // --- Automation ---
+    /// Run an expect-style script file over the serial line
+    #[arg(long, value_name = "FILE")]
+    script: Option<String>,
+
+    /// Try default console credentials at a login: prompt
+    #[arg(long)]
+    cred_brute: bool,
+
+    /// Harvest secrets from an open root shell (transcript to --dump-out)
+    #[arg(long)]
+    harvest: bool,
+
+    // --- Hardware triggering ---
+    /// Pulse a hardware reset over control lines: dtr|rts|esp
+    #[arg(long, value_name = "PROFILE")]
+    reset: Option<String>,
+
+    /// Assert a serial BREAK (Unix) for --break-ms milliseconds
+    #[arg(long)]
+    send_break: bool,
+
+    /// BREAK duration in milliseconds
+    #[arg(long, default_value_t = 250)]
+    break_ms: u64,
+
+    /// Watch for this pattern and fire a glitch trigger when it appears
+    #[arg(long, value_name = "PATTERN")]
+    glitch_on: Option<String>,
+
+    /// Trigger line for --glitch-on: rts|dtr|none
+    #[arg(long, default_value = "rts")]
+    glitch_line: String,
+
+    /// Glitch trigger pulse width in microseconds
+    #[arg(long, default_value_t = 200)]
+    glitch_pulse_us: u64,
+
+    /// External command to run when the glitch pattern hits
+    #[arg(long)]
+    glitch_cmd: Option<String>,
+
+    /// Seconds to watch for the glitch pattern
+    #[arg(long, default_value_t = 60)]
+    glitch_timeout: u64,
+
+    // --- Logic-analyzer baud detection ---
+    /// Detect baud with a sigrok-cli analyzer (driver, e.g. fx2lafw)
+    #[arg(long, value_name = "DRIVER")]
+    sigrok_driver: Option<String>,
+
+    /// sigrok capture sample rate (Hz)
+    #[arg(long, default_value_t = 8_000_000)]
+    sigrok_samplerate: u64,
+
+    /// sigrok number of samples to capture
+    #[arg(long, default_value_t = 1_000_000)]
+    sigrok_samples: u64,
+
+    /// sigrok channel carrying RX
+    #[arg(long, default_value = "D0")]
+    sigrok_channel: String,
 }
 
 struct BaudOwl {
@@ -509,6 +666,46 @@ impl BaudOwl {
             return Ok(());
         }
 
+        // Actions that do not need baudrate auto-detection.
+        if let Some(driver) = &self.args.sigrok_driver {
+            match sigrok::capture_and_detect(
+                driver,
+                self.args.sigrok_samplerate,
+                self.args.sigrok_samples,
+                &self.args.sigrok_channel,
+            ) {
+                Ok(b) => println!("{} sigrok baud: {}", "[+]".bold().green(), b.to_string().bold()),
+                Err(e) => println!("{} sigrok detect failed: {}", "[!]".red().bold(), e),
+            }
+            return Ok(());
+        }
+
+        let fixed_baud = self.args.baud.unwrap_or(115200);
+
+        if let Some(profile) = &self.args.reset {
+            if let Err(e) = reset::pulse_reset(&self.args.port, fixed_baud, profile) {
+                println!("{} {}", "Reset failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        if self.args.send_break {
+            if let Err(e) = reset::send_break(&self.args.port, fixed_baud, self.args.break_ms) {
+                println!("{} {}", "BREAK failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        if self.args.detect_framing {
+            framing::detect_framing(
+                &self.args.port,
+                fixed_baud,
+                Duration::from_millis(1500),
+                self.running.clone(),
+            );
+            return Ok(());
+        }
+
         // Determine the baudrate: forced via --baud, otherwise auto-detect.
         // --auto forces a scan even when --baud is supplied.
         let baud = if let Some(b) = self.args.baud {
@@ -548,6 +745,140 @@ impl BaudOwl {
                 }
             }
         };
+
+        // U-Boot memory write (patch primitive).
+        if let Some(addr) = &self.args.write_mem {
+            let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let a = parse_num(addr)?;
+                let v = parse_num(&self.args.write_value)?;
+                if v > 0xff {
+                    return Err("write value must be a byte (0-255)".into());
+                }
+                let c = parse_num(&self.args.write_count)?;
+                uboot::write_flow(
+                    &self.args.port,
+                    baud,
+                    a,
+                    v as u8,
+                    c,
+                    &autoroot::parse_interrupt_key(&self.args.interrupt_key)?,
+                    Duration::from_secs(self.args.break_timeout),
+                    self.running.clone(),
+                )
+            })();
+            if let Err(e) = res {
+                println!("\n{} {}", "Memory write failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        // Firmware dump (flash or RAM) over U-Boot.
+        if self.args.dump_flash || self.args.dump_mem.is_some() {
+            let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let (source, offset) = if let Some(addr) = &self.args.dump_mem {
+                    (uboot::FlashSource::Ram, parse_num(addr)?)
+                } else {
+                    let src = uboot::FlashSource::parse(&self.args.dump_source).ok_or_else(|| {
+                        format!("bad --dump-source '{}' (sf|nand|mmc)", self.args.dump_source)
+                    })?;
+                    (src, parse_num(&self.args.dump_offset)?)
+                };
+                let opts = uboot::DumpOpts {
+                    source,
+                    ram_addr: parse_num(&self.args.dump_ram_addr)?,
+                    offset,
+                    length: parse_num(&self.args.dump_length)?,
+                    chunk: parse_num(&self.args.dump_chunk)?,
+                    out_path: self.args.dump_out.clone(),
+                    interrupt_key: autoroot::parse_interrupt_key(&self.args.interrupt_key)?,
+                    break_timeout: Duration::from_secs(self.args.break_timeout),
+                    prompt: None,
+                };
+                uboot::dump(&self.args.port, baud, &opts, self.running.clone())
+            })();
+            if let Err(e) = res {
+                println!("\n{} {}", "Dump failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        if let Some(remote) = &self.args.shell_dump {
+            if let Err(e) = uboot::shell_dump(
+                &self.args.port,
+                baud,
+                remote,
+                &self.args.dump_out,
+                self.running.clone(),
+            ) {
+                println!("\n{} {}", "Shell dump failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        if self.args.detect_protocol {
+            let data = sample_bytes(&self.args.port, baud, Duration::from_secs(2), self.running.clone());
+            match framing::detect_protocol(&data) {
+                Some(p) => println!("{} protocol: {}", "[+]".bold().green(), p.bold()),
+                None => println!("{} no known binary protocol in {} bytes", "[-]".yellow(), data.len()),
+            }
+            return Ok(());
+        }
+
+        if let Some(path) = &self.args.script {
+            let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let text = std::fs::read_to_string(path)?;
+                let steps = script::parse_script(&text)?;
+                script::run_script(&self.args.port, baud, &steps, self.running.clone())
+            })();
+            if let Err(e) = res {
+                println!("\n{} {}", "Script failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        if self.args.cred_brute {
+            match recon::cred_brute(
+                &self.args.port,
+                baud,
+                &recon::default_creds(),
+                self.running.clone(),
+            ) {
+                Ok(Some((u, p))) => {
+                    println!("{} valid login {}:{}", "[+]".bold().green(), u, p)
+                }
+                Ok(None) => {}
+                Err(e) => println!("\n{} {}", "Credential test failed:".red().bold(), e),
+            }
+            return Ok(());
+        }
+
+        if self.args.harvest {
+            if let Err(e) = recon::harvest(
+                &self.args.port,
+                baud,
+                Some(&self.args.dump_out),
+                self.running.clone(),
+            ) {
+                println!("\n{} {}", "Harvest failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
+
+        if let Some(pattern) = &self.args.glitch_on {
+            let opts = glitch::GlitchOpts {
+                pattern: pattern.clone(),
+                line: glitch::TriggerLine::parse(&self.args.glitch_line),
+                pulse_us: self.args.glitch_pulse_us,
+                command: self.args.glitch_cmd.clone(),
+                timeout: Duration::from_secs(self.args.glitch_timeout),
+            };
+            if let Err(e) =
+                glitch::watch_and_trigger(&self.args.port, baud, &opts, self.running.clone())
+            {
+                println!("\n{} {}", "Glitch watch failed:".red().bold(), e);
+            }
+            return Ok(());
+        }
 
         // Autoroot path: break into U-Boot and enable a shell.
         if self.args.autoroot {

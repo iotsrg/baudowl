@@ -36,7 +36,7 @@ pub struct AutoRootOpts {
 }
 
 /// Bootloader prompts that indicate we have broken into a console.
-fn default_prompts() -> Vec<String> {
+pub fn default_prompts() -> Vec<String> {
     [
         "=> ", "u-boot>", "uboot>", "cfe>", "redboot>", "ar7240>", "ath>", "rlx>",
         "marvell>>", "bcm>", "(ipq) #", "boot>",

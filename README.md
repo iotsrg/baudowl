@@ -81,13 +81,14 @@ baudowl --port /dev/ttyUSB0 --autoroot --interrupt-key ctrl-c
 | Option              | Description                                         | Default        |
 |---------------------|-----------------------------------------------------|----------------|
 | `--autoroot`        | Break into U-Boot, inject shell bootargs, get shell | `false`        |
-| `--shell-arg <S>`   | Boot argument injected to obtain a shell            | `init=/bin/sh` |
+| `--shell-arg <S>`   | Boot argument or preset name to obtain a shell (see `--list-shell-args`) | `init=/bin/sh` |
 | `--interrupt-key <K>`| Key spammed to stop autoboot: `enter`/`space`/`ctrl-c`/`esc`/`\xNN` | `enter` |
 | `--break-timeout <S>`| Seconds to spam the interrupt key                  | `30`           |
 | `--single`          | Also append the `single` (single-user) flag         | `false`        |
 | `--boot-cmd <C>`    | Command used to continue booting after setenv       | `boot`         |
 | `--persist`         | `saveenv` to flash (persistent, **dangerous**)      | `false`        |
 | `--dry-run`         | Print commands that would be sent, change nothing   | `false`        |
+| `--list-shell-args` | List the shell boot-argument presets and exit       | `false`        |
 
 ---
 
@@ -119,6 +120,24 @@ This is a logic-level PoC: it stops at "you have a root shell" (verify with
 [F] Shell reached. Interactive bridge (Ctrl-C exits). Verify: id; cat /proc/version
 ```
 
+### Shell boot-argument presets
+
+`--shell-arg` accepts a preset name or a raw boot argument. List them with `baudowl --list-shell-args`:
+
+| Preset | Boot argument | Notes |
+|--------|---------------|-------|
+| `sh` | `init=/bin/sh` | most common, no auth (covers BusyBox `/bin/sh`) |
+| `bash` | `init=/bin/bash` | if bash is present, no auth |
+| `sbin-sh` | `init=/sbin/sh` | some embedded layouts, no auth |
+| `ash` | `init=/bin/ash` | BusyBox ash where `/bin/ash` exists, no auth |
+| `rdinit` | `rdinit=/bin/sh` | initramfs/initrd, shell before the real root pivots, no auth |
+| `single` | `single` | single-user (may prompt for the root password) |
+| `s` | `S` | single-user, sysvinit style (may prompt for the root password) |
+| `rescue` | `systemd.unit=rescue.target` | systemd rescue (usually prompts for the root password) |
+| `emergency` | `systemd.unit=emergency.target` | systemd emergency (usually prompts for the root password) |
+
+Any other value is used verbatim, e.g. `--shell-arg "init=/bin/sh rw console=ttyS0,115200"`. The `init=`/`rdinit=` family replaces the device init and bypasses login; `single` and systemd targets may still require the root password. Existing `init=`/`rdinit=` and `quiet`/`splash` tokens are handled automatically.
+
 ---
 
 ## Example Output
@@ -144,15 +163,3 @@ Baudrates tried: 1
 Bytes processed: 50
 Detection time: 124.50ms
 ```
-
----
-
-## Authors & Credits
-
-Developed with ❤️ by the [IoT Security Research Group](https://github.com/iotsrg)  
-
----
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).

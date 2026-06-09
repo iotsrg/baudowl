@@ -150,7 +150,7 @@ struct Args {
     #[arg(long)]
     autoroot: bool,
 
-    /// Boot argument injected to obtain a shell
+    /// Boot argument or preset name to obtain a shell (see --list-shell-args)
     #[arg(long, default_value = "init=/bin/sh")]
     shell_arg: String,
 
@@ -177,6 +177,10 @@ struct Args {
     /// Show the exact commands that would be sent, but do not modify or boot
     #[arg(long)]
     dry_run: bool,
+
+    /// List the built-in shell boot-argument presets and exit
+    #[arg(long)]
+    list_shell_args: bool,
 }
 
 struct BaudOwl {
@@ -500,6 +504,11 @@ impl BaudOwl {
             return Ok(());
         }
 
+        if self.args.list_shell_args {
+            autoroot::print_presets();
+            return Ok(());
+        }
+
         // Determine the baudrate: forced via --baud, otherwise auto-detect.
         // --auto forces a scan even when --baud is supplied.
         let baud = if let Some(b) = self.args.baud {
@@ -550,7 +559,7 @@ impl BaudOwl {
                 }
             };
             let opts = autoroot::AutoRootOpts {
-                shell_arg: self.args.shell_arg.clone(),
+                shell_arg: autoroot::resolve_shell_arg(&self.args.shell_arg),
                 interrupt_key,
                 break_timeout: Duration::from_secs(self.args.break_timeout),
                 single: self.args.single,

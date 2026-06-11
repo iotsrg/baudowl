@@ -25,6 +25,7 @@ mod timing;
 mod fuzz;
 mod sniff;
 mod mitm;
+mod ports;
 
 /// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
@@ -168,7 +169,7 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
 
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.5
+    (o o)   BAUDOWL v1.6.0
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -206,6 +207,14 @@ struct Args {
     /// Display supported baud rates and exit
     #[arg(short, long)]
     baudlist: bool,
+
+    /// List available serial ports with USB info and exit
+    #[arg(long)]
+    list: bool,
+
+    /// With --list, also show legacy PCI/unknown ports (ttyS*)
+    #[arg(long)]
+    list_all: bool,
 
     /// Suppress data display (quiet mode)
     #[arg(short, long)]
@@ -490,6 +499,10 @@ struct Args {
     /// Stop sniffing after this many bytes
     #[arg(long, default_value_t = 65536)]
     sniff_max: usize,
+
+    /// Pulse a reset (dtr|rts|esp) right after opening, to capture boot output
+    #[arg(long, value_name = "PROFILE")]
+    sniff_reset: Option<String>,
 
     /// Replay the bytes of a file out the port
     #[arg(long, value_name = "FILE")]
@@ -837,6 +850,11 @@ impl BaudOwl {
             return Ok(());
         }
 
+        if self.args.list {
+            ports::list_ports(self.args.list_all);
+            return Ok(());
+        }
+
         if self.args.list_shell_args {
             autoroot::print_presets();
             return Ok(());
@@ -1086,6 +1104,7 @@ impl BaudOwl {
                 max_bytes: self.args.sniff_max,
                 decode: self.args.sniff_decode,
                 idle_gap_us: self.args.sniff_idle_us,
+                reset: self.args.sniff_reset.clone(),
             };
             if let Err(e) = sniff::sniff(&self.args.port, baud, &opts, self.running.clone()) {
                 println!("\n{} {}", "Sniff failed:".red().bold(), e);

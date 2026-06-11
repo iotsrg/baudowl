@@ -168,7 +168,7 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
 
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.5
+    (o o)   BAUDOWL v1.5.1
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -490,6 +490,10 @@ struct Args {
     /// Stop sniffing after this many bytes
     #[arg(long, default_value_t = 65536)]
     sniff_max: usize,
+
+    /// Pulse a reset (dtr|rts|esp) right after opening, to capture boot output
+    #[arg(long, value_name = "PROFILE")]
+    sniff_reset: Option<String>,
 
     /// Replay the bytes of a file out the port
     #[arg(long, value_name = "FILE")]
@@ -1086,6 +1090,7 @@ impl BaudOwl {
                 max_bytes: self.args.sniff_max,
                 decode: self.args.sniff_decode,
                 idle_gap_us: self.args.sniff_idle_us,
+                reset: self.args.sniff_reset.clone(),
             };
             if let Err(e) = sniff::sniff(&self.args.port, baud, &opts, self.running.clone()) {
                 println!("\n{} {}", "Sniff failed:".red().bold(), e);

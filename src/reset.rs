@@ -25,6 +25,8 @@ pub fn pulse_reset(port: &str, baud: u32, profile: &str) -> Result<(), Box<dyn E
             p.write_data_terminal_ready(false)?;
         }
         "rts" => {
+            // hard reset (run app): hold GPIO0 high via DTR low, pulse the reset line
+            p.write_data_terminal_ready(false)?;
             p.write_request_to_send(true)?;
             sleep(Duration::from_millis(120));
             p.write_request_to_send(false)?;

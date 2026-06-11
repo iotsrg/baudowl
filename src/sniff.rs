@@ -52,6 +52,36 @@ pub struct SniffOpts {
     pub max_bytes: usize,
     pub decode: bool,
     pub idle_gap_us: u64,
+    pub reset: Option<String>,
+}
+
+/// Pulse a reset on an already-open port so the same handle captures the boot
+/// output (no reset/capture race). `esp` is the esptool DTR/RTS sequence.
+fn pulse_reset(p: &mut Box<dyn serialport::SerialPort>, profile: &str) {
+    match profile.to_ascii_lowercase().as_str() {
+        "dtr" => {
+            let _ = p.write_data_terminal_ready(true);
+            sleep(Duration::from_millis(120));
+            let _ = p.write_data_terminal_ready(false);
+        }
+        "rts" => {
+            // hard reset (run app): GPIO0 high via DTR low, pulse the reset line
+            let _ = p.write_data_terminal_ready(false);
+            let _ = p.write_request_to_send(true);
+            sleep(Duration::from_millis(120));
+            let _ = p.write_request_to_send(false);
+        }
+        "esp" => {
+            let _ = p.write_data_terminal_ready(false);
+            let _ = p.write_request_to_send(true);
+            sleep(Duration::from_millis(100));
+            let _ = p.write_data_terminal_ready(true);
+            let _ = p.write_request_to_send(false);
+            sleep(Duration::from_millis(50));
+            let _ = p.write_data_terminal_ready(false);
+        }
+        _ => {}
+    }
 }
 
 pub fn sniff(
@@ -72,6 +102,11 @@ pub fn sniff(
         .open()
         .map_err(|e| format!("open {}: {}", port, e))?;
     p.clear(serialport::ClearBuffer::All).ok();
+
+    if let Some(profile) = &opts.reset {
+        println!("{} pulsing reset ({}) on the open port", "[*]".cyan(), profile);
+        pulse_reset(&mut p, profile);
+    }
 
     let start = Instant::now();
     let mut events: Vec<(u64, u8)> = Vec::new();

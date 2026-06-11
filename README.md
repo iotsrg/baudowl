@@ -7,7 +7,7 @@
 
 ```
     )___(
-    (o o)   BaudOwl v1.5
+    (o o)   BaudOwl v1.5.1
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -242,6 +242,10 @@ Sit on the line passively, or inline between two endpoints.
 # Passive read-only capture: timestamps, frame splitting, protocol decode
 baudowl --baud 9600 --sniff --sniff-decode --sniff-out capture.bin
 
+# Capture boot output by resetting on the same open port (no reset/capture race).
+# ESP8266/NodeMCU boot ROM prints at 74880 baud; --sniff-reset dtr|rts|esp
+baudowl --baud 74880 --sniff --sniff-reset esp
+
 # Replay a captured or crafted byte log back out the port
 baudowl --baud 9600 --replay capture.bin
 
@@ -254,7 +258,8 @@ baudowl --baud 115200 --port /dev/ttyUSB0 --mitm --mitm-port-b /dev/ttyUSB1 \
 
 - **Unit-tested logic (48 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, script parser, secret patterns, sigrok baud math, mmc block addressing, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting.
 - **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test, timing attack (secret recovered char-by-char), fuzzer (crash found and minimized to the trigger byte), passive sniff (capture and protocol decode), MITM bridge (forward and rewrite in transit).
-- **Code-complete, needs real hardware to verify:** DTR/RTS reset, serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.
+- **Verified on real hardware (ESP8266 NodeMCU, CP2102 bridge):** port access, baudrate detection, passive sniff with boot-ROM capture via `--sniff-reset`, DTR/RTS reset, and the interactive script engine (AT queries returning firmware version and `OK`).
+- **Code-complete, needs other hardware to verify:** serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.
 
 ---
 
@@ -264,7 +269,7 @@ Baudrate detection:
 
 ```text
     )___(
-    (o o)   BAUDOWL v1.5
+    (o o)   BAUDOWL v1.5.1
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!

@@ -25,6 +25,7 @@ mod timing;
 mod fuzz;
 mod sniff;
 mod mitm;
+mod ports;
 
 /// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
@@ -168,7 +169,7 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
 
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.5.1
+    (o o)   BAUDOWL v1.6.0
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -206,6 +207,14 @@ struct Args {
     /// Display supported baud rates and exit
     #[arg(short, long)]
     baudlist: bool,
+
+    /// List available serial ports with USB info and exit
+    #[arg(long)]
+    list: bool,
+
+    /// With --list, also show legacy PCI/unknown ports (ttyS*)
+    #[arg(long)]
+    list_all: bool,
 
     /// Suppress data display (quiet mode)
     #[arg(short, long)]
@@ -838,6 +847,11 @@ impl BaudOwl {
 
         if self.args.baudlist {
             self.print_baudrates();
+            return Ok(());
+        }
+
+        if self.args.list {
+            ports::list_ports(self.args.list_all);
             return Ok(());
         }
 

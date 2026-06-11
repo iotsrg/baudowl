@@ -7,7 +7,7 @@
 
 ```
     )___(
-    (o o)   BaudOwl v1.5.1
+    (o o)   BaudOwl v1.6.0
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -269,7 +269,7 @@ Baudrate detection:
 
 ```text
     )___(
-    (o o)   BAUDOWL v1.5.1
+    (o o)   BAUDOWL v1.6.0
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!

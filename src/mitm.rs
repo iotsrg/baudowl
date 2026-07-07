@@ -78,8 +78,15 @@ fn pump(
         match reader.read(&mut buf) {
             Ok(n) if n > 0 => {
                 let out = apply_rules(&buf[..n], &rules, dir);
-                let _ = writer.write_all(&out);
-                let _ = writer.flush();
+                if let Err(e) = writer.write_all(&out).and_then(|_| writer.flush()) {
+                    eprintln!(
+                        "{} write error: {}; stopping bridge",
+                        label.bold().red(),
+                        e
+                    );
+                    running.store(false, Ordering::SeqCst);
+                    break;
+                }
                 let changed = if out != buf[..n] { " (rewritten)" } else { "" };
                 println!(
                     "{} {} {} byte(s){}",
@@ -91,7 +98,15 @@ fn pump(
             }
             Ok(_) => {}
             Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(_) => break,
+            Err(e) => {
+                eprintln!(
+                    "{} read error: {}; stopping bridge",
+                    label.bold().red(),
+                    e
+                );
+                running.store(false, Ordering::SeqCst);
+                break;
+            }
         }
     }
 }

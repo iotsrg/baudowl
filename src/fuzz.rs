@@ -115,7 +115,10 @@ pub fn gen_protocol_case(proto: Proto, prng: &mut Prng, max_len: usize) -> Vec<u
             let mut f = crate::framing::modbus_frame(addr, func, &data);
             if prng.below(2) == 0 && !f.is_empty() {
                 let i = prng.below(f.len());
-                f[i] = f[i].wrapping_add(1 + prng.byte());
+                // Add a random delta in 1..=255 so the byte always changes.
+                // Computed in usize to avoid the u8 overflow of `1 + prng.byte()`
+                // (which panics in debug and silently wraps to a no-op in release).
+                f[i] = f[i].wrapping_add((1 + prng.below(255)) as u8);
             }
             f
         }
@@ -388,6 +391,21 @@ mod tests {
             }
         }
         assert!(any_valid);
+    }
+
+    #[test]
+    fn protocol_gen_never_overflows() {
+        // Regression: the Modbus corruption step used `1 + prng.byte()`, which
+        // overflows u8 when byte()==255 (debug panic / release no-op). Across
+        // this many seeds and iterations the old code is near-certain to hit
+        // byte()==255 inside the corruption branch; the fixed code must not panic.
+        for seed in 0..200u64 {
+            let mut prng = Prng::new(seed);
+            for _ in 0..200 {
+                let _ = gen_protocol_case(Proto::Modbus, &mut prng, 32);
+                let _ = gen_protocol_case(Proto::Nmea, &mut prng, 48);
+            }
+        }
     }
 
     #[test]

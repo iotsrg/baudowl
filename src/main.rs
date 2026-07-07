@@ -128,9 +128,13 @@ fn parse_mitm_rules(specs: &[String]) -> Result<Vec<mitm::Rule>, String> {
             "both" => mitm::Dir::Both,
             other => return Err(format!("bad direction '{}' (a2b|b2a|both)", other)),
         };
+        let find = parse_hex_bytes(parts[1])?;
+        if find.is_empty() {
+            return Err(format!("rule '{}' has an empty find pattern", spec));
+        }
         rules.push(mitm::Rule {
             dir,
-            find: parse_hex_bytes(parts[1])?,
+            find,
             replace: parse_hex_bytes(parts[2])?,
         });
     }
@@ -585,7 +589,9 @@ impl BaudOwl {
     fn detect_baudrate(&mut self) -> Result<u32, Box<dyn std::error::Error>> {
         let start_time = Instant::now();
         let rates = self.get_active_baudrates();
-        
+        let mut best_baud: Option<u32> = None;
+        let mut best_score: u32 = 0;
+
         println!("{}", "Starting detection...".bright_blue());
         if self.args.highspeed {
             println!("{}", "High-speed mode: Enabled".bright_magenta());
@@ -650,7 +656,10 @@ impl BaudOwl {
                 continue;
             }
 
-            // Analyze the collected bytes
+            // Analyze the collected bytes. Keep scanning every rate and pick the
+            // highest-scoring one rather than the first over the threshold: on a
+            // noisy line a wrong baud can occasionally cross the threshold before
+            // the true one, and the true baud is reliably the maximum.
             let score = self.calculate_readability_score(&all_bytes);
             let preview = self.get_preview(&all_bytes);
 
@@ -659,16 +668,29 @@ impl BaudOwl {
             }
 
             if score >= self.args.threshold as u32 {
-                println!("{} (score: {}%)", "MATCH!".green().bold(), score);
-                self.stats.detection_time = start_time.elapsed();
-                return Ok(baudrate);
+                println!("{} (score: {}%)", "candidate".green().bold(), score);
             } else {
                 println!("{} (score: {}%)", "low".dimmed(), score);
+            }
+            if score > best_score {
+                best_score = score;
+                best_baud = Some(baudrate);
             }
         }
 
         self.stats.detection_time = start_time.elapsed();
-        Err("Could not detect baud rate - no readable output found".into())
+        match best_baud {
+            Some(b) if best_score >= self.args.threshold as u32 => {
+                println!(
+                    "{} {} baud (best score: {}%)",
+                    "Best match:".bold().green(),
+                    b.to_string().bold(),
+                    best_score
+                );
+                Ok(b)
+            }
+            _ => Err("Could not detect baud rate - no readable output found".into()),
+        }
     }
 
     fn calculate_readability_score(&self, data: &[u8]) -> u32 {
@@ -1155,6 +1177,24 @@ impl BaudOwl {
                 s.extend(self.args.fuzz_crash_sig.iter().cloned());
                 s
             };
+            let proto = self.args.fuzz_protocol.to_ascii_lowercase();
+            if !matches!(proto.as_str(), "raw" | "modbus" | "nmea") {
+                eprintln!(
+                    "{} invalid --fuzz-protocol '{}' (raw|modbus|nmea)",
+                    "Error:".red().bold(),
+                    self.args.fuzz_protocol
+                );
+                return Ok(());
+            }
+            let reset_mode = self.args.fuzz_reset.to_ascii_lowercase();
+            if !matches!(reset_mode.as_str(), "dtr" | "rts" | "cmd" | "none") {
+                eprintln!(
+                    "{} invalid --fuzz-reset '{}' (dtr|rts|cmd|none)",
+                    "Error:".red().bold(),
+                    self.args.fuzz_reset
+                );
+                return Ok(());
+            }
             let opts = fuzz::FuzzOpts {
                 seed_input,
                 max_len: self.args.fuzz_maxlen,

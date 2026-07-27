@@ -7,7 +7,7 @@
 
 ```
     )___(
-    (o o)   BaudOwl v1.6.0
+    (o o)   BaudOwl v1.6.1
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -256,7 +256,7 @@ baudowl --baud 115200 --port /dev/ttyUSB0 --mitm --mitm-port-b /dev/ttyUSB1 \
 
 ### Verification status
 
-- **Unit-tested logic (50 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting.
+- **Unit-tested logic (55 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, hostile-input self-fuzz across every parser, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting.
 - **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test, timing attack (secret recovered char-by-char), fuzzer (crash found and minimized to the trigger byte), passive sniff (capture and protocol decode), MITM bridge (forward and rewrite in transit).
 - **Verified on real hardware (ESP8266 NodeMCU, CP2102 bridge):** port access, baudrate detection, passive sniff with boot-ROM capture via `--sniff-reset`, DTR/RTS reset, and the interactive script engine (AT queries returning firmware version and `OK`).
 - **Code-complete, needs other hardware to verify:** serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.
@@ -269,7 +269,7 @@ Baudrate detection:
 
 ```text
     )___(
-    (o o)   BAUDOWL v1.6.0
+    (o o)   BAUDOWL v1.6.1
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!

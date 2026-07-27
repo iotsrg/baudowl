@@ -142,13 +142,23 @@ fn parse_escaped(s: &str) -> Result<Vec<u8>, String> {
                     i += 2;
                 }
                 b'x' | b'X' if i + 3 < b.len() => {
-                    let hex = &s[i + 2..i + 4];
-                    match u8::from_str_radix(hex, 16) {
-                        Ok(v) => {
-                            out.push(v);
+                    // Read the two hex digits as bytes. `s` is user input that
+                    // may contain multibyte UTF-8, so slicing it by byte index
+                    // (`&s[i + 2..i + 4]`) would panic mid-codepoint.
+                    match (
+                        (b[i + 2] as char).to_digit(16),
+                        (b[i + 3] as char).to_digit(16),
+                    ) {
+                        (Some(hi), Some(lo)) => {
+                            out.push(((hi << 4) | lo) as u8);
                             i += 4;
                         }
-                        Err(_) => return Err(format!("invalid hex escape '\\x{}'", hex)),
+                        _ => {
+                            return Err(format!(
+                                "invalid hex escape '\\x{}'",
+                                String::from_utf8_lossy(&b[i + 2..i + 4])
+                            ))
+                        }
                     }
                 }
                 other => {
@@ -360,6 +370,19 @@ mod tests {
         assert_eq!(parse_interrupt_key("ctrl-c").unwrap(), vec![0x03]);
         assert_eq!(parse_interrupt_key("space").unwrap(), vec![0x20]);
         assert_eq!(parse_interrupt_key("esc").unwrap(), vec![0x1b]);
+    }
+
+    #[test]
+    fn key_parsing_survives_multibyte() {
+        // Regression: `&s[i + 2..i + 4]` panicked when a multibyte char followed
+        // "\x", because the str slice landed mid-codepoint. These must return
+        // an error or a value, never panic.
+        for k in ["\\x€x", "\\x€", "€€€", "\\xé9", "\\x\u{FFFD}\u{FFFD}", "\\xff€"] {
+            let _ = parse_interrupt_key(k);
+        }
+        // A valid escape must still parse after the fix.
+        assert_eq!(parse_interrupt_key("\\xff").unwrap(), vec![0xff]);
+        assert!(parse_interrupt_key("\\x€x").is_err());
     }
 
     #[test]

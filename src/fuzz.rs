@@ -240,13 +240,13 @@ fn send_and_crashed(
     timeout: Duration,
     sigs: &[String],
 ) -> bool {
-    let start = s.log.len();
+    s.start_capture();
     let _ = s.send(case);
     if newline {
         let _ = s.send(b"\r");
     }
     s.collect(timeout);
-    let out = String::from_utf8_lossy(&s.log[start..]);
+    let out = String::from_utf8_lossy(&s.log);
     looks_like_crash(&out, sigs)
 }
 

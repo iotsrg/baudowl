@@ -182,7 +182,7 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
 
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.6.1
+    (o o)   BAUDOWL v1.6.2
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!

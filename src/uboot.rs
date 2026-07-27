@@ -139,10 +139,10 @@ fn dump_window(len: u64, baud: u32) -> Duration {
 /// reappears (or `timeout`), using the full transcript so large dumps are not
 /// truncated by the matcher's sliding window.
 fn run_capture(s: &mut Session, cmd: &str, prompt: &str, timeout: Duration) -> String {
-    let start = s.log.len();
+    s.start_capture();
     let _ = s.send_line(cmd);
     s.expect(&[prompt.to_string()], timeout);
-    String::from_utf8_lossy(&s.log[start..]).into_owned()
+    String::from_utf8_lossy(&s.log).into_owned()
 }
 
 /// Read `len` bytes of device memory at `addr` via `md.b`.
@@ -345,7 +345,7 @@ pub fn shell_dump(
 
     const START: &str = "__BAUDOWL_B64_START__";
     const END: &str = "__BAUDOWL_B64_END__";
-    let start = s.log.len();
+    s.start_capture();
     // echo markers around base64 so the prompt and command echo never pollute
     // the decoded stream.
     s.send_line(&format!(
@@ -357,7 +357,7 @@ pub fn shell_dump(
     if s.expect(&[END.to_string()], Duration::from_secs(120)).is_none() {
         return Err("end marker not seen; base64 missing on target, or file unreadable".into());
     }
-    let text = String::from_utf8_lossy(&s.log[start..]).into_owned();
+    let text = String::from_utf8_lossy(&s.log).into_owned();
     let b64 = extract_last(&text, START, END)
         .ok_or("could not locate base64 markers in output")?;
     let data = decode_base64(b64);

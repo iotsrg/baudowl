@@ -17,7 +17,9 @@ pub struct Session {
     running: Arc<AtomicBool>,
     /// Mirror device output to stdout as it arrives.
     pub echo: bool,
-    /// Full transcript of everything read from the device.
+    /// Transcript of bytes read from the device. Callers that only need the
+    /// output of a single operation call `start_capture()` first, which clears
+    /// it; otherwise this grows for the life of the Session.
     pub log: Vec<u8>,
 }
 
@@ -49,6 +51,13 @@ impl Session {
     pub fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.port.write_all(bytes)?;
         self.port.flush()
+    }
+
+    /// Begin a fresh capture: drop any previously logged bytes so `log` holds
+    /// only this operation's output. Bounds memory on long-running loops
+    /// (fuzzing, chunked dumps) that would otherwise retain the whole session.
+    pub fn start_capture(&mut self) {
+        self.log.clear();
     }
 
     /// Assert or release the DTR control line.

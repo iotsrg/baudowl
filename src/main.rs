@@ -103,14 +103,23 @@ fn write_config_to(path: &Path, contents: &str) -> io::Result<()> {
 
 /// Parse a hex byte string ("deadbeef" or "de ad be ef") into bytes.
 fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
-    let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    // Operate on bytes, not str slices: `s` comes from the command line and may
+    // contain multibyte UTF-8, which would make a byte-indexed str slice panic
+    // mid-codepoint. Non-ASCII bytes simply fail to_digit here.
+    let clean: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     if (clean.len() & 1) != 0 {
         return Err(format!("hex '{}' must be even length", s));
     }
-    (0..clean.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&clean[i..i + 2], 16).map_err(|_| format!("bad hex in '{}'", s))
+    clean
+        .chunks(2)
+        .map(|pair| {
+            match (
+                (pair[0] as char).to_digit(16),
+                (pair[1] as char).to_digit(16),
+            ) {
+                (Some(hi), Some(lo)) => Ok(((hi << 4) | lo) as u8),
+                _ => Err(format!("bad hex in '{}'", s)),
+            }
         })
         .collect()
 }
@@ -173,7 +182,7 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
 
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.6.0
+    (o o)   BAUDOWL v1.6.1
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -1306,5 +1315,70 @@ mod tests {
         assert!(should_fall_back(&io::Error::from(io::ErrorKind::NotFound)));
         assert!(!should_fall_back(&io::Error::from(io::ErrorKind::AlreadyExists)));
         assert!(!should_fall_back(&io::Error::from(io::ErrorKind::Other)));
+    }
+
+    #[test]
+    fn hex_parsing_survives_multibyte() {
+        // Regression: `&clean[i..i + 2]` panicked on multibyte input because the
+        // str slice landed mid-codepoint. Must error, never panic.
+        for s in ["€€", "\u{1F4A9}\u{1F4A9}", "de€d", "a2b:€€:4142", "é9"] {
+            let _ = parse_hex_bytes(s);
+            let _ = parse_mitm_rules(&[s.to_string()]);
+        }
+        assert!(parse_hex_bytes("€€").is_err());
+        assert_eq!(parse_hex_bytes("de ad").unwrap(), vec![0xde, 0xad]);
+    }
+
+    /// Self-fuzz: throw pseudorandom and adversarial bytes at every text parser
+    /// in the crate. None of them may panic. This guards the whole
+    /// "slice user input by byte index" bug class, not just the known cases.
+    #[test]
+    fn parsers_never_panic_on_hostile_input() {
+        let mut prng = crate::fuzz::Prng::new(0xBAD5EED);
+        // A corpus of bytes that historically break naive parsers.
+        let seeds: Vec<Vec<u8>> = vec![
+            b"".to_vec(),
+            b"\xff\xfe\xfd".to_vec(),
+            "€".as_bytes().to_vec(),
+            "\u{1F4A9}".as_bytes().to_vec(),
+            b"$GP*\xe2\x82\xac".to_vec(),
+            b"\x00\x24\x2a\xf0\x9f\x92\xa9".to_vec(),
+            b"0: \xff\xff  junk".to_vec(),
+            b"\\x".to_vec(),
+            b"sendraw \xc3".to_vec(),
+        ];
+
+        let mut cases = seeds;
+        for _ in 0..600 {
+            let len = prng.below(48);
+            cases.push((0..len).map(|_| prng.byte()).collect());
+        }
+
+        for raw in &cases {
+            let text = String::from_utf8_lossy(raw);
+
+            // byte-oriented parsers
+            let _ = crate::framing::detect_protocol(raw);
+            let _ = crate::framing::printable_score(raw);
+            let _ = crate::framing::modbus_crc16(raw);
+            let _ = crate::framing::nmea_checksum(raw);
+            let events: Vec<(u64, u8)> =
+                raw.iter().enumerate().map(|(i, &b)| (i as u64 * 7, b)).collect();
+            let _ = crate::sniff::split_frames(&events, 100);
+            let _ = crate::sigrok::baud_from_samples(raw, 1_000_000);
+            let _ = crate::fuzz::looks_like_crash(&text, &crate::fuzz::default_crash_signatures());
+
+            // text-oriented parsers (the byte-index slicing bug class)
+            let _ = crate::uboot::parse_md_b(&text);
+            let _ = crate::uboot::decode_base64(&text);
+            let _ = crate::recon::extract_secrets(&text);
+            let _ = crate::autoroot::parse_interrupt_key(&text);
+            let _ = crate::autoroot::resolve_shell_arg(&text);
+            let _ = crate::autoroot::build_shell_bootargs(&text, "init=/bin/sh", true);
+            let _ = crate::script::parse_script(&text);
+            let _ = parse_hex_bytes(&text);
+            let _ = parse_num(&text);
+            let _ = parse_mitm_rules(&[text.to_string()]);
+        }
     }
 }

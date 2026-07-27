@@ -57,15 +57,26 @@ fn unescape(s: &str) -> String {
 }
 
 fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
-    let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    // Operate on bytes, not str slices: script files are arbitrary user input
+    // and may contain multibyte UTF-8, which would make a byte-indexed str
+    // slice panic mid-codepoint. Non-ASCII bytes simply fail to_digit here.
+    let cleaned: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
     if cleaned.is_empty() || (cleaned.len() & 1) != 0 {
         return Err("hex must be non-empty and even length".to_string());
     }
-    (0..cleaned.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&cleaned[i..i + 2], 16)
-                .map_err(|_| format!("bad hex byte '{}'", &cleaned[i..i + 2]))
+    cleaned
+        .chunks(2)
+        .map(|pair| {
+            match (
+                (pair[0] as char).to_digit(16),
+                (pair[1] as char).to_digit(16),
+            ) {
+                (Some(hi), Some(lo)) => Ok(((hi << 4) | lo) as u8),
+                _ => Err(format!(
+                    "bad hex byte '{}'",
+                    String::from_utf8_lossy(pair)
+                )),
+            }
         })
         .collect()
 }
@@ -181,6 +192,27 @@ mod tests {
         assert_eq!(
             steps[1],
             Step::Expect { pattern: "=>".into(), timeout: Duration::from_secs(10) }
+        );
+    }
+
+    #[test]
+    fn hex_parsing_survives_multibyte() {
+        // Regression: `&cleaned[i..i + 2]` panicked on multibyte input because
+        // the str slice landed mid-codepoint. Must error, never panic.
+        for src in [
+            "sendraw €€",
+            "sendraw \u{1F4A9}",
+            "sendraw de€d",
+            "sendraw ééééé",
+            "send €\nexpect 1 €\nsendraw €€",
+        ] {
+            let _ = parse_script(src);
+        }
+        assert!(parse_script("sendraw €€").is_err());
+        // valid hex still works
+        assert_eq!(
+            parse_script("sendraw dead").unwrap()[0],
+            Step::SendRaw(vec![0xde, 0xad])
         );
     }
 

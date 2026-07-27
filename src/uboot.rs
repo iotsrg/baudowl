@@ -124,9 +124,14 @@ fn extract_last<'a>(haystack: &'a str, start: &str, end: &str) -> Option<&'a str
 /// Estimate how long `len` bytes of `md.b` output takes at `baud`, with margin.
 fn dump_window(len: u64, baud: u32) -> Duration {
     // md.b prints roughly 4 chars/byte plus ~14 chars of address/ascii per line.
-    let chars = len * 4 + (len / 16 + 1) * 14;
+    // Saturating throughout: `len` comes straight from --dump-length, so a huge
+    // value would otherwise overflow (debug panic, or a silently wrapped and
+    // far-too-short timeout in release). The result is clamped to 120s anyway.
+    let chars = len
+        .saturating_mul(4)
+        .saturating_add((len / 16).saturating_add(1).saturating_mul(14));
     let bytes_per_sec = (baud / 10).max(1) as u64;
-    let secs = chars / bytes_per_sec + 3;
+    let secs = (chars / bytes_per_sec).saturating_add(3);
     Duration::from_secs(secs.clamp(3, 120))
 }
 
@@ -277,12 +282,15 @@ pub fn dump(
             break;
         }
         let this = chunk.min(opts.length - done);
+        // Saturating: offset comes from --dump-mem/--dump-offset and may sit
+        // near u64::MAX, where `offset + done` would overflow.
+        let cur_offset = opts.offset.saturating_add(done);
         let md_addr = if opts.source == FlashSource::Ram {
-            opts.offset + done
+            cur_offset
         } else {
             let cmd = opts
                 .source
-                .read_cmd(opts.ram_addr, opts.offset + done, this)
+                .read_cmd(opts.ram_addr, cur_offset, this)
                 .ok_or("source has no read command")?;
             let _ = run_capture(&mut s, &cmd, &prompt, Duration::from_secs(8));
             opts.ram_addr
@@ -291,12 +299,14 @@ pub fn dump(
         if bytes.is_empty() {
             return Err(format!(
                 "no data parsed at offset {:#x}; md.b may be unsupported or prompt mismatched",
-                opts.offset + done
+                cur_offset
             )
             .into());
         }
         file.write_all(&bytes)?;
-        done += bytes.len() as u64;
+        // bytes is non-empty (checked above), so `done` always advances and the
+        // loop cannot spin forever.
+        done = done.saturating_add(bytes.len() as u64);
         print!(
             "\r{} {:#x}/{:#x} ({:.0}%)   ",
             "dumped".green(),
@@ -400,6 +410,17 @@ mod tests {
         let t = "echo __S__; base64; echo __E__\n__S__\nPAYLOAD\n__E__\n# ";
         assert_eq!(extract_last(t, "__S__", "__E__"), Some("\nPAYLOAD\n"));
         assert_eq!(extract_last(t, "__S__", "__MISSING__"), None);
+    }
+
+    #[test]
+    fn dump_window_survives_huge_length() {
+        // `--dump-length 0xFFFFFFFFFFFFFFFF` reaches this with len = u64::MAX.
+        // `len * 4` overflows: debug panics, release silently wraps to a bogus
+        // (too short) timeout. Must saturate and clamp instead.
+        let w = dump_window(u64::MAX, 115200);
+        assert!(w.as_secs() <= 120 && w.as_secs() >= 3);
+        assert_eq!(dump_window(0, 115200).as_secs(), 3);
+        let _ = dump_window(u64::MAX, 1);
     }
 
     #[test]

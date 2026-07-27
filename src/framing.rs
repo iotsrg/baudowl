@@ -78,8 +78,16 @@ fn looks_like_nmea(data: &[u8]) -> bool {
             continue;
         }
         let body = &line.as_bytes()[dollar + 1..star];
-        let given = &line[star + 1..star + 3];
-        if let Ok(want) = u8::from_str_radix(given, 16) {
+        // Slice the two checksum digits as bytes, not as a str: `line` is a lossy
+        // decode of raw serial data, so a multibyte char after '*' would make a
+        // str slice land mid-codepoint and panic. Bounds are already guaranteed
+        // by the `star + 3 > line.len()` check above; non-ASCII digits simply
+        // fail to parse and are skipped.
+        let given = &line.as_bytes()[star + 1..star + 3];
+        if let Some(want) = std::str::from_utf8(given)
+            .ok()
+            .and_then(|g| u8::from_str_radix(g, 16).ok())
+        {
             if nmea_checksum(body) == want && !body.is_empty() {
                 return true;
             }
@@ -277,5 +285,24 @@ mod tests {
         let s = nmea_sentence("GPGGA,123519,4807.038,N");
         assert!(looks_like_nmea(s.as_bytes()));
         assert_eq!(detect_protocol(s.as_bytes()), Some("NMEA 0183 (GPS/GNSS)"));
+    }
+
+    #[test]
+    fn nmea_decode_survives_binary_garbage() {
+        // Regression: `&line[star+1..star+3]` panicked when a multibyte char (or
+        // a lossy-decoded U+FFFD from an invalid byte) followed '*', because the
+        // slice landed mid-codepoint. These must return without panicking.
+        for junk in [
+            &b"$*\xff"[..],                 // '*' then one invalid byte -> U+FFFD
+            &b"$GP*\xe2\x82\xac"[..],       // '*' then a 3-byte '€'
+            &b"$\xff\xff*\x80\x80"[..],     // continuation bytes around the frame
+            &b"\x00\x24\x2a\xf0\x9f\x92\xa9"[..], // '$' '*' then a 4-byte emoji
+        ] {
+            let _ = looks_like_nmea(junk);
+            let _ = detect_protocol(junk);
+        }
+        // A real sentence must still decode after the fix.
+        let s = nmea_sentence("GPRMC,081836,A,3751.65,S");
+        assert!(looks_like_nmea(s.as_bytes()));
     }
 }

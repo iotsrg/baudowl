@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use colored::*;
 
+use crate::ui;
 use crate::session::Session;
 
 /// Well-known embedded/IoT default console credentials (user, pass).
@@ -73,15 +74,13 @@ pub fn cred_brute(
             || out.contains("failed")
             || out.contains("login:");
         if got_shell && !rejected {
-            println!(
-                "{} valid credentials: {}:{}",
-                "[+]".bold().green(),
-                u,
-                if p.is_empty() { "<empty>" } else { p }
+            ui::win(
+                "VALID CREDENTIALS",
+                &format!("{}:{}", u, if p.is_empty() { "<empty>" } else { p }),
             );
             return Ok(Some((u.to_string(), p.to_string())));
         }
-        println!("{} {}:{} rejected", "[-]".dimmed(), u, if p.is_empty() { "<empty>" } else { p });
+        ui::detail(&format!("{}:{} rejected", u, if p.is_empty() { "<empty>" } else { p }));
     }
     println!("{}", "no default credentials worked".yellow());
     Ok(None)
@@ -187,7 +186,11 @@ pub fn harvest(
     let text = String::from_utf8_lossy(&s.log).into_owned();
     let secrets = extract_secrets(&text);
 
-    println!("\n{} {} potential secret(s):", "[+]".bold().green(), secrets.len());
+    if secrets.is_empty() {
+        ui::warn("no secrets matched");
+    } else {
+        ui::win("SECRETS FOUND", &format!("{} item(s)", secrets.len()));
+    }
     for sec in &secrets {
         println!("  {:<16} {}", sec.category.cyan(), sec.evidence);
     }

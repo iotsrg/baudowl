@@ -7,7 +7,7 @@
 
 ```
     )___(
-    (o o)   BaudOwl v1.6.2
+    (o o)   BaudOwl v1.7.0
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -256,10 +256,36 @@ baudowl --baud 115200 --port /dev/ttyUSB0 --mitm --mitm-port-b /dev/ttyUSB1 \
 
 ### Verification status
 
-- **Unit-tested logic (55 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, hostile-input self-fuzz across every parser, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting.
+- **Unit-tested logic (57 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, hostile-input self-fuzz across every parser, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting.
 - **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test, timing attack (secret recovered char-by-char), fuzzer (crash found and minimized to the trigger byte), passive sniff (capture and protocol decode), MITM bridge (forward and rewrite in transit).
 - **Verified on real hardware (ESP8266 NodeMCU, CP2102 bridge):** port access, baudrate detection, passive sniff with boot-ROM capture via `--sniff-reset`, DTR/RTS reset, and the interactive script engine (AT queries returning firmware version and `OK`).
 - **Code-complete, needs other hardware to verify:** serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.
+
+---
+
+## Output
+
+Colour carries meaning, so a result is recognisable without reading the text:
+
+| Style | Meaning |
+|---|---|
+| Boxed bright green | the objective was achieved (root shell, credentials, firmware, a crash) |
+| Boxed bright red | a destructive or persistent change (`saveenv` to flash) |
+| Green `[+]` | a positive intermediate result |
+| Red `[!]` | the operation failed |
+| Yellow `[!]` | proceed with caution |
+| Cyan `[*]` / `[A]` | phase progress |
+| Dimmed | low-signal detail (rejected guesses, per-iteration chatter) |
+
+```text
+============================================
+  CRASH FOUND  iteration 47, 17 byte input
+============================================
+[+] minimized repro: 1 byte(s) = ff
+```
+
+Colour is disabled automatically when stdout is not a terminal, so redirected
+output stays clean text. Use `--no-color` or set `NO_COLOR=1` to force it off.
 
 ---
 
@@ -269,7 +295,7 @@ Baudrate detection:
 
 ```text
     )___(
-    (o o)   BAUDOWL v1.6.2
+    (o o)   BAUDOWL v1.7.0
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!

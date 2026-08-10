@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use colored::*;
 
+use crate::ui;
 use crate::session::Session;
 
 /// Summary statistics for a sample set (microseconds).
@@ -199,7 +200,11 @@ pub fn timing_attack(
             }
         }
     }
-    println!("{} recovered: {:?}", "[+]".bold().green(), recovered);
+    if recovered.is_empty() {
+        ui::warn("no characters recovered; no usable timing signal");
+    } else {
+        ui::win("SECRET RECOVERED", &format!("{:?}", recovered));
+    }
     Ok(recovered)
 }
 
@@ -244,10 +249,9 @@ pub fn leakage_test(
         sb.median, sb.min, sb.max, sb.n
     );
     if t.abs() > 4.5 {
-        println!(
-            "{} timing leak detected: |t| = {:.1} (> 4.5 TVLA threshold)",
-            "[!]".bold().red(),
-            t.abs()
+        ui::win(
+            "TIMING LEAK DETECTED",
+            &format!("|t| = {:.1} (> 4.5 TVLA threshold)", t.abs()),
         );
     } else {
         println!(

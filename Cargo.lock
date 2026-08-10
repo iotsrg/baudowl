@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "baudowl"
-version = "1.6.2"
+version = "1.7.0"
 dependencies = [
  "clap",
  "colored",

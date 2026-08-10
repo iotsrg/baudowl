@@ -256,10 +256,37 @@ baudowl --baud 115200 --port /dev/ttyUSB0 --mitm --mitm-port-b /dev/ttyUSB1 \
 
 ### Verification status
 
-- **Unit-tested logic (57 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, hostile-input self-fuzz across every parser, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting.
+- **Unit-tested logic (59 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, hostile-input self-fuzz across every parser, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting.
 - **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test, timing attack (secret recovered char-by-char), fuzzer (crash found and minimized to the trigger byte), passive sniff (capture and protocol decode), MITM bridge (forward and rewrite in transit).
 - **Verified on real hardware (ESP8266 NodeMCU, CP2102 bridge):** port access, baudrate detection, passive sniff with boot-ROM capture via `--sniff-reset`, DTR/RTS reset, and the interactive script engine (AT queries returning firmware version and `OK`).
 - **Code-complete, needs other hardware to verify:** serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.
+
+---
+
+## Baudrate scoring
+
+Every candidate rate is scanned and ranked; the highest scorer wins, and the
+**margin over the runner-up** is reported as a confidence level. A narrow margin
+means two rates looked alike and the result needs a second look.
+
+The weights are measured, not guessed. A UART sampling at the wrong rate drags
+start and stop bits into the data field, so wrong rates emit bytes with the high
+bit set very often. On a bit-level 8N1 simulation of a U-Boot banner:
+
+| Rate | high-bit bytes | score |
+|---|---|---|
+| 115200 (true) | 0% | 90 |
+| 38400 | 36% | 53 |
+| 57600 | 46% | 42 |
+| 9600 | 45% | 28 |
+| 230400 | 47% | 17 |
+
+Shannon entropy was evaluated and deliberately left out: the true rate scored
+4.73 bits/byte while wrong rates spanned 3.66 to 5.41, so it overlaps the signal
+and would reduce separation rather than improve it.
+
+Scope: this scores ASCII console output. A correct-baud binary protocol scores
+low here by design; use `--detect-protocol` for Modbus, NMEA, and MAVLink.
 
 ---
 

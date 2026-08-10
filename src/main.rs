@@ -181,6 +181,68 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
     data
 }
 
+/// Score how likely `data` is a correct-baud ASCII console stream, 0-100.
+///
+/// The weights come from measurement, not intuition. A UART sampling at the
+/// wrong rate produces bytes with the high bit set very often (misaligned
+/// sampling drags start/stop bits into the data field): on a simulated U-Boot
+/// banner the correct rate yields 0% high-bit bytes while every wrong rate
+/// yields 36-47%. That single feature separates far better than anything else,
+/// so it carries real weight here.
+///
+/// Shannon entropy was evaluated and deliberately left out: on the same corpus
+/// the correct rate scored 4.73 bits/byte while wrong rates spanned 3.66-5.41,
+/// so it overlaps the true signal and would add noise rather than separation.
+///
+/// Scope: this targets ASCII console output. A correct-baud binary protocol
+/// (Modbus, MAVLink) legitimately scores low here; use --detect-protocol for
+/// those.
+fn readability_score(data: &[u8]) -> u32 {
+    if data.is_empty() {
+        return 0;
+    }
+    let total = data.len() as f32;
+    let mut printable = 0u32; // includes tab/CR/LF, which real consoles emit
+    let mut alnum = 0u32;
+    let mut structure = 0u32; // whitespace and common punctuation
+    let mut high_bit = 0u32; // >0x7F: the wrong-baud signature
+    let mut null_ff = 0u32; // 0x00/0xFF: framing errors and idle-line breaks
+
+    for &b in data {
+        if (0x20..=0x7e).contains(&b) || matches!(b, b'\t' | b'\n' | b'\r') {
+            printable += 1;
+        }
+        if b.is_ascii_alphanumeric() {
+            alnum += 1;
+        }
+        if matches!(
+            b,
+            b' ' | b'\n' | b'\r' | b'\t' | b'.' | b':' | b'-' | b'=' | b'[' | b']' | b'/' | b','
+        ) {
+            structure += 1;
+        }
+        if b > 0x7f {
+            high_bit += 1;
+        }
+        if b == 0x00 || b == 0xff {
+            null_ff += 1;
+        }
+    }
+
+    let printable_ratio = printable as f32 / total;
+    let alnum_ratio = alnum as f32 / total;
+    // Structure saturates: 25% whitespace/punctuation is already prose-like,
+    // more than that should not keep adding confidence.
+    let structure_ratio = (structure as f32 / total / 0.25).min(1.0);
+    let high_bit_ratio = high_bit as f32 / total;
+    let null_ff_ratio = null_ff as f32 / total;
+
+    let text = 45.0 * printable_ratio + 25.0 * alnum_ratio + 15.0 * structure_ratio;
+    let framing = 15.0 * (1.0 - high_bit_ratio);
+    let score = text + framing - 40.0 * null_ff_ratio;
+    score.clamp(0.0, 100.0) as u32
+}
+
 const BANNER: &str = r#"
     )___(
     (o o)   BAUDOWL v1.7.0
@@ -618,6 +680,7 @@ impl BaudOwl {
         let rates = self.get_active_baudrates();
         let mut best_baud: Option<u32> = None;
         let mut best_score: u32 = 0;
+        let mut ranked: Vec<(u32, u32)> = Vec::new();
 
         println!("{}", "Starting detection...".bright_blue());
         if self.args.highspeed {
@@ -703,58 +766,63 @@ impl BaudOwl {
                 best_score = score;
                 best_baud = Some(baudrate);
             }
+            ranked.push((baudrate, score));
         }
 
         self.stats.detection_time = start_time.elapsed();
+
+        // Rank the candidates. The margin over the runner-up matters as much as
+        // the winning score: a narrow margin means two rates looked alike and
+        // the result should not be trusted without a second look.
+        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        if ranked.len() > 1 && ranked[0].1 > 0 {
+            println!("\n{}", "Ranked candidates:".bold().cyan());
+            for (i, (b, sc)) in ranked.iter().take(4).enumerate() {
+                let line = format!("  {}. {:>7} baud  score {:>3}%", i + 1, b, sc);
+                if i == 0 {
+                    println!("{}", line.green().bold());
+                } else {
+                    println!("{}", line.dimmed());
+                }
+            }
+        }
+        let runner_up = ranked.get(1).map(|r| r.1).unwrap_or(0);
+        let margin = best_score.saturating_sub(runner_up);
+
         match best_baud {
             Some(b) if best_score >= self.args.threshold as u32 => {
+                let confidence = if margin >= 25 {
+                    "high"
+                } else if margin >= 10 {
+                    "medium"
+                } else {
+                    "low"
+                };
                 println!(
-                    "{} {} baud (best score: {}%)",
+                    "{} {} baud  (score {}%, margin {} over runner-up, confidence {})",
                     "Best match:".bold().green(),
                     b.to_string().bold(),
-                    best_score
+                    best_score,
+                    margin,
+                    confidence
                 );
+                if margin < 10 {
+                    ui::warn(
+                        "low confidence: the runner-up scored almost as well; re-run with a longer --timeout or verify manually",
+                    );
+                }
                 Ok(b)
             }
-            _ => Err("Could not detect baud rate - no readable output found".into()),
+            _ => Err(format!(
+                "no baudrate scored at or above the --threshold of {} (best was {}%)",
+                self.args.threshold, best_score
+            )
+            .into()),
         }
     }
 
     fn calculate_readability_score(&self, data: &[u8]) -> u32 {
-        if data.is_empty() {
-            return 0;
-        }
-
-        let mut printable = 0;
-        let mut alphanumeric = 0;
-        let mut common_chars = 0; // space, newline, common punctuation
-
-        for &byte in data {
-            let c = byte as char;
-            
-            if (0x20..=0x7E).contains(&byte) {
-                printable += 1;
-            }
-            if c.is_ascii_alphanumeric() {
-                alphanumeric += 1;
-            }
-            if matches!(byte, b' ' | b'\n' | b'\r' | b'.' | b':' | b'-' | b'=' | b'[' | b']') {
-                common_chars += 1;
-            }
-        }
-
-        let total = data.len() as f32;
-        let printable_ratio = printable as f32 / total;
-        let alpha_ratio = alphanumeric as f32 / total;
-        let common_ratio = common_chars as f32 / total;
-
-        // Score: weighted combination
-        // High printable ratio is most important
-        // Some alphanumeric content expected
-        // Common formatting chars (spaces, newlines) indicate structure
-        let score = (printable_ratio * 50.0) + (alpha_ratio * 30.0) + (common_ratio * 20.0);
-        
-        (score.min(100.0)) as u32
+        readability_score(data)
     }
 
     fn get_preview(&self, data: &[u8]) -> String {
@@ -1323,6 +1391,52 @@ mod tests {
         assert!(should_fall_back(&io::Error::from(io::ErrorKind::NotFound)));
         assert!(!should_fall_back(&io::Error::from(io::ErrorKind::AlreadyExists)));
         assert!(!should_fall_back(&io::Error::from(io::ErrorKind::Other)));
+    }
+
+
+    // Ground truth for the scorer: bytes a real UART receiver produces when it
+    // samples a 115200-baud U-Boot banner at the wrong rate. Generated with a
+    // bit-level 8N1 simulator (start-bit hunt, 1.5-bit first sample, resync on
+    // the stop bit), not hand-written noise.
+    const TRUE_115200: &[u8] = b"\x55\x2d\x42\x6f\x6f\x74\x20\x32\x30\x31\x38\x2e\x30\x33\x20\x28\x4a\x61\x6e\x20\x30\x31\x20\x32\x30\x32\x30\x20\x2d\x20\x30\x30\x3a\x30\x30\x3a\x30\x30\x29\x20\x62\x6f\x61\x72\x64\x2d\x78\x79\x7a\x0d\x0a\x44\x52\x41\x4d\x3a\x20\x20\x35\x31\x32\x20\x4d\x69\x42\x0d\x0a\x4e\x41\x4e\x44\x3a\x20\x20\x32\x35\x36\x20\x4d\x69\x42\x0d\x0a\x49\x6e\x3a\x20\x20\x20\x20\x73\x65\x72\x69\x61\x6c\x0d\x0a\x4f\x75\x74\x3a\x20\x20\x20\x73\x65\x72\x69\x61\x6c\x0d\x0a\x45\x72\x72\x3a\x20\x20\x20\x73\x65\x72\x69\x61\x6c\x0d\x0a";
+    const WRONG_38400: &[u8] = b"\x7a\xbb\xb0\x70\x30\x21\xb3\xf0\xb0\x38\xf0\xf0\x30\x70\x32\xb1\x6b\x22\x33\xb8\x30\x23\x29\xeb\xf0\x38\x73\x21\x33\x30\xfa\x33\x61\xfa\x30\xfa\x33\x21\xf2\x30\xfa\x33\x61\xfa\x30\x3a\x68\xb3\x70\x73\x32\x3a\x7a\x32\x7a\x7a\x32\x30\xa1\x31\x29\x7a\xf2\xb0\xf1\x70\x3a\x30\xf0\x30\xb0\xb1\xb1\x71\xf3\xba\x33\xe9\xea\xb0\x30\x73\x61\x2a\x31\xf8\x28\x6a\xfb\x30\x30\x32\x6b\xbb\x31\x30\x32\x6b\xf2\x31\x30\x32\x6b\xbb\x31\xb8\x33\x21\x32\x33\xbb\x78\xb0\x33\xba\x73\xfb\xf0\x68\x39\xa1\x61\x3b\xb0\xb9\x30\x73\xb0";
+    const WRONG_57600: &[u8] = b"\x3f\xbc\xed\x48\x5a\x2a\x5a\x08\x9c\x0d\x5a\x48\x4a\x0a\x09\x4a\x4a\x4a\x4a\x08\xbc\xcc\x3d\xde\x3e\xa8\x9e\x4d\x08\x5b\x0a\x9d\x3c\xa8\xac\x4d\x08\x7a\x0b\x9d\x3c\x98\x4d\x08\x08\xbe\x9e\xac\x09\xfd\x4f\x08\xd8\xcd\x9c\x3d\xb8\xce\x0a\x08\xbe\x9e\xac\x09\xbd\x4f\x08\xb8\x8f\x3a\x88\xec\x98\xdd\x98\xdd\xe8\x0d\xee\xcd\x98\xef\x8d\xbd\x4f\x08\x0a\x09\x6b\x38\xf8\x89\xbd\x0f\x4a\x4a\x49\x0a\x88\xac\x48\x0a\x4a\x4a\x38\x48\x4a\x4a\x4a\x1a\x88\x9d\xae\xc9\xce\x09\xcd\xbc\x0a\x78\x4a\xb8\x8c\x09\x9d\xad\x0a\x48";
+    const WRONG_230400: &[u8] = b"\x66\x66\x9e\x18\x80\xe6\x9e\xfe\x9e\x60\x06\x18\x78\x00\x98\xe0\x18\x18\x86\x00\x98\x78\x00\x18\x86\x98\x98\x06\x86\x9e\x00\x18\x98\xe0\x18\x18\x78\x00\x18\x78\x00\x18\x98\x9e\x18\x18\x18\x18\x7e\x00\x18\x18\x7e\x00\x18\x98\x98\x18\x18\xe0\xe6\x9e\x06\x86\xf8\x06\x78\xe6\x86\x80\x66\x86\xfe\x66\x80\x98\x80\x60\x86\x98\x66\x66\x98\x98\x18\x18\x98\xe6\x98\xe0\x18\x78\x00\x98\x1e\x66\x9e\x18\x66\x80\x98\x80\xf8\x98\x06\x86\x98\x60\x86\x7e\x00\x18\x18\x78\x66\x18\x1e\x00\x98\x1e\x66\x9e\x18\x66\x80\x98\x80\x86";
+    const WRONG_9600: &[u8] = b"\x14\x48\x18\xd5\x09\x61\x94\xc8\x1c\xd6\x7c\x10\x8c\x10\x31\xbb\x18\x49\x14\xee\x86\x04\xd5\xc4\xfb\x94\x39\xce\x4c\x21\xc4\x1c\x85\xad\xd5\x09\x61\x94\xc8\x1c\xd6\x7c\x10\x8c\x10\x31";
+
+    #[test]
+    fn scorer_separates_true_baud_from_wrong_baud() {
+        let t = readability_score(TRUE_115200);
+        let wrong = [
+            readability_score(WRONG_38400),
+            readability_score(WRONG_57600),
+            readability_score(WRONG_230400),
+            readability_score(WRONG_9600),
+        ];
+        let worst = *wrong.iter().max().unwrap();
+        // The true rate must clear the default --threshold of 60 with room to
+        // spare, and beat every wrong rate by a wide margin. Measured at the
+        // time of writing: true 90, worst wrong 53.
+        assert!(t >= 85, "true baud scored {}, expected >= 85", t);
+        assert!(worst <= 60, "worst wrong baud scored {}, expected <= 60", worst);
+        assert!(
+            t - worst >= 25,
+            "separation {} too small (true {}, worst wrong {})",
+            t - worst,
+            t,
+            worst
+        );
+    }
+
+    #[test]
+    fn scorer_rejects_pathological_input() {
+        assert_eq!(readability_score(b""), 0);
+        // all high-bit, all null, all 0xff must all score near zero
+        assert!(readability_score(&[0x80u8; 64]) < 20);
+        assert!(readability_score(&[0x00u8; 64]) < 20);
+        assert!(readability_score(&[0xffu8; 64]) < 20);
+        // clean ASCII prose scores high
+        assert!(readability_score(b"root@target:/# cat /proc/version\r\nLinux 4.9\r\n") > 80);
     }
 
     #[test]

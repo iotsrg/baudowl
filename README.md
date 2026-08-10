@@ -25,6 +25,7 @@
 - ⏱️ Timing side-channel attack and leakage assessment on console checks
 - 🐛 Serial fuzzer (raw or protocol-aware) with crash oracle, auto-reset, and repro minimization
 - 🕵️ Passive sniffing, replay, and a MITM bridge with in-transit byte rewrite
+- 📺 Stay connected after detection: live read-only monitor or two-way session
 - 📊 Real-time detection statistics
 - 🔧 Minicom configuration generator
 - 🎨 Colorful and readable terminal output
@@ -60,6 +61,10 @@ baudowl --turbo --quiet
 baudowl --name mydevice
 baudowl --help
 
+# detect the rate, then stay connected instead of exiting
+baudowl --port /dev/ttyUSB0 --monitor       # live view, read-only
+baudowl --port /dev/ttyUSB0 --interactive   # two-way, type commands
+
 # U-Boot autoroot (authorized lab targets only)
 baudowl --baud 115200 --autoroot --dry-run        # show commands, change nothing
 baudowl --baud 115200 --autoroot                  # volatile setenv + boot to shell
@@ -82,6 +87,10 @@ baudowl --port /dev/ttyUSB0 --autoroot --interrupt-key ctrl-c
 | `--turbo`         | Fast scan (common baudrates only)      | `false`        |
 | `--highspeed`     | Enable scan for 1M+ baudrates          | `false`        |
 | `--baud <N>`      | Force a baudrate, skip auto-detection  | `-`            |
+| `-m`, `--monitor` | After detection, stream live output (read-only) | `false` |
+| `-i`, `--interactive`| After detection, open a two-way session | `false`      |
+| `--monitor-raw`   | With `--monitor`, do not mask non-printable bytes | `false` |
+| `--no-color`      | Disable colour (also honours `NO_COLOR`) | `false`      |
 
 ### Autoroot options (U-Boot shell via bootargs)
 

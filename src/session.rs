@@ -185,6 +185,43 @@ impl Session {
         window
     }
 
+    /// Read-only live view: stream device output to stdout until Ctrl-C.
+    /// Never writes to the device, so it is safe to point at a target you do
+    /// not want to disturb. Non-printable bytes are shown as '.' so a binary
+    /// stream cannot corrupt the terminal.
+    pub fn monitor(&mut self, raw: bool) -> io::Result<()> {
+        let mut buf = [0u8; 512];
+        let mut out = io::stdout();
+        while self.still_running() {
+            match self.port.read(&mut buf) {
+                Ok(n) if n > 0 => {
+                    if raw {
+                        out.write_all(&buf[..n])?;
+                    } else {
+                        let safe: Vec<u8> = buf[..n]
+                            .iter()
+                            .map(|&b| {
+                                if (0x20..=0x7e).contains(&b)
+                                    || matches!(b, b'\n' | b'\r' | b'\t')
+                                {
+                                    b
+                                } else {
+                                    b'.'
+                                }
+                            })
+                            .collect();
+                        out.write_all(&safe)?;
+                    }
+                    out.flush()?;
+                }
+                Ok(_) => {}
+                Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
     /// Line-buffered interactive bridge: stdin lines are sent to the device
     /// (terminated with CR) and device output is streamed to stdout until the
     /// running flag is cleared (Ctrl-C).

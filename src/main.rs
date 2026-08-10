@@ -296,6 +296,20 @@ struct Args {
     #[arg(long)]
     no_color: bool,
 
+    /// After detecting the baudrate, stay connected and stream live output
+    /// (read-only, Ctrl-C to exit)
+    #[arg(short = 'm', long)]
+    monitor: bool,
+
+    /// Like --monitor but two-way: type commands to the device (Ctrl-C exits)
+    #[arg(short = 'i', long)]
+    interactive: bool,
+
+    /// With --monitor, pass bytes through untranslated instead of masking
+    /// non-printable ones
+    #[arg(long)]
+    monitor_raw: bool,
+
     /// Suppress data display (quiet mode)
     #[arg(short, long)]
     quiet: bool,
@@ -1345,7 +1359,38 @@ impl BaudOwl {
             self.launch_minicom(name)?;
         }
 
+        // Stay connected instead of exiting the moment the rate is known.
+        if self.args.monitor || self.args.interactive {
+            let mode = if self.args.interactive {
+                "interactive (type to send, Ctrl-C exits)"
+            } else {
+                "read-only (Ctrl-C exits)"
+            };
+            ui::step("*", &format!("Connected at {} baud, {}", baud, mode));
+            println!();
+            match session::Session::open(&self.args.port, baud, self.running.clone()) {
+                Ok(mut s) => {
+                    let r = if self.args.interactive {
+                        s.interactive()
+                    } else {
+                        s.monitor(self.args.monitor_raw)
+                    };
+                    if let Err(e) = r {
+                        ui::fail(&format!("session ended: {}", e));
+                    }
+                }
+                Err(e) => ui::fail(&format!("could not open {}: {}", self.args.port, e)),
+            }
+            return Ok(());
+        }
+
         self.print_stats();
+        if !self.args.quiet {
+            ui::step(
+                "*",
+                "Use --monitor to stay connected, or --interactive to send commands",
+            );
+        }
         Ok(())
     }
 }

@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use colored::*;
 
+use crate::ui;
 use crate::session::Session;
 
 /// Storage backend a dump reads from.
@@ -317,11 +318,9 @@ pub fn dump(
         std::io::stdout().flush().ok();
     }
     file.flush()?;
-    println!(
-        "\n{} wrote {} bytes to {}",
-        "[+]".bold().green(),
-        done,
-        opts.out_path
+    ui::win(
+        "FIRMWARE EXTRACTED",
+        &format!("{} bytes -> {}", done, opts.out_path),
     );
     Ok(())
 }
@@ -365,11 +364,9 @@ pub fn shell_dump(
         return Err("decoded zero bytes; file may be empty or base64 failed".into());
     }
     std::fs::write(out_path, &data)?;
-    println!(
-        "\n{} wrote {} bytes to {}",
-        "[+]".bold().green(),
-        data.len(),
-        out_path
+    ui::win(
+        "FILE EXTRACTED",
+        &format!("{} bytes -> {}", data.len(), out_path),
     );
     Ok(())
 }

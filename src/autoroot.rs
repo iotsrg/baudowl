@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use colored::*;
 
+use crate::ui;
 use crate::session::Session;
 
 /// Options controlling the autoroot routine.
@@ -329,7 +330,7 @@ pub fn run(
     s.send_line(&setcmd)?;
     s.collect(Duration::from_millis(500));
     if opts.persist {
-        println!("{} Writing env to flash (persistent).", "[!]".bold().red());
+        ui::danger("PERSISTENT FLASH WRITE", "saveenv: this survives a power cycle");
         s.send_line("saveenv")?;
         s.collect(Duration::from_secs(2));
     }
@@ -340,13 +341,8 @@ pub fn run(
     println!("{} Waiting for shell prompt...", "[F]".bold().yellow());
     let reached = s.expect(&shell_prompts(), Duration::from_secs(60)).is_some();
     if reached {
-        println!(
-            "\n{} {}",
-            "[F]".bold().green(),
-            "Shell reached. Interactive bridge (Ctrl-C exits). Verify: id; cat /proc/version"
-                .bold()
-                .green()
-        );
+        ui::win("ROOT SHELL OBTAINED", &format!("{} @ {} baud", port, baud));
+        ui::step("F", "Interactive bridge (Ctrl-C exits). Verify: id; cat /proc/version");
     } else {
         println!(
             "\n{} boot issued but no shell prompt within 60s. Entering interactive bridge anyway.",

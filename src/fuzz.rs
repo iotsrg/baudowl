@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use colored::*;
 
+use crate::ui;
 use crate::session::Session;
 
 /// Deterministic xorshift64 PRNG so a fuzzing run is reproducible from a seed.
@@ -306,11 +307,9 @@ pub fn run_fuzz(
             gen_protocol_case(opts.proto, &mut prng, opts.max_len)
         };
         if send_and_crashed(&mut s, &case, opts.newline, opts.response_timeout, &opts.crash_sigs) {
-            println!(
-                "\n{} crash at iteration {} with {} bytes",
-                "[!]".bold().red(),
-                i,
-                case.len()
+            ui::win(
+                "CRASH FOUND",
+                &format!("iteration {}, {} byte input", i, case.len()),
             );
             do_reset(&mut s, opts.reset, &opts.reset_cmd);
             let sigs = &opts.crash_sigs;
@@ -326,12 +325,11 @@ pub fn run_fuzz(
                 crashed
             });
             if seen.insert(minimized.clone()) {
-                println!(
-                    "{} minimized to {} byte(s): {}",
-                    "[+]".bold().green(),
+                ui::found(&format!(
+                    "minimized repro: {} byte(s) = {}",
                     minimized.len(),
                     to_hex(&minimized)
-                );
+                ));
                 crashes.push(minimized);
             }
         }

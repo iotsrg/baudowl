@@ -26,6 +26,7 @@ mod fuzz;
 mod sniff;
 mod mitm;
 mod ports;
+mod ui;
 
 /// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
@@ -182,7 +183,7 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
 
 const BANNER: &str = r#"
     )___(
-    (o o)   BAUDOWL v1.6.2
+    (o o)   BAUDOWL v1.7.0
    /  V  \  -------------------
   /(     )\  The Serial Port Detective
     ^^ ^^   Sniffs out baudrates in seconds!
@@ -228,6 +229,10 @@ struct Args {
     /// With --list, also show legacy PCI/unknown ports (ttyS*)
     #[arg(long)]
     list_all: bool,
+
+    /// Disable coloured output (also honours the NO_COLOR env var)
+    #[arg(long)]
+    no_color: bool,
 
     /// Suppress data display (quiet mode)
     #[arg(short, long)]
@@ -863,7 +868,7 @@ impl BaudOwl {
     }
 
     fn print_stats(&self) {
-        println!("\n{}", "=== Detection Statistics ===".bold().cyan());
+        ui::section("=== Detection Statistics ===");
         println!("Baudrates tried: {}", self.stats.baudrates_tried);
         println!("Bytes processed: {}", self.stats.bytes_processed);
         println!("Detection time: {:.2?}", self.stats.detection_time);
@@ -909,14 +914,14 @@ impl BaudOwl {
 
         if let Some(profile) = &self.args.reset {
             if let Err(e) = reset::pulse_reset(&self.args.port, fixed_baud, profile) {
-                println!("{} {}", "Reset failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Reset failed:", e));
             }
             return Ok(());
         }
 
         if self.args.send_break {
             if let Err(e) = reset::send_break(&self.args.port, fixed_baud, self.args.break_ms) {
-                println!("{} {}", "BREAK failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "BREAK failed:", e));
             }
             return Ok(());
         }
@@ -949,7 +954,7 @@ impl BaudOwl {
             if let Err(e) =
                 mitm::mitm(&self.args.port, &port_b, fixed_baud, rules, self.running.clone())
             {
-                println!("{} {}", "MITM failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "MITM failed:", e));
             }
             return Ok(());
         }
@@ -962,7 +967,7 @@ impl BaudOwl {
                 match self.detect_baudrate() {
                     Ok(r) => r,
                     Err(e) => {
-                        println!("\n{} {}", "Detection failed:".red().bold(), e);
+                        ui::fail(&format!("{} {}", "Detection failed:", e));
                         self.print_stats();
                         return Ok(());
                     }
@@ -987,7 +992,7 @@ impl BaudOwl {
                     r
                 }
                 Err(e) => {
-                    println!("\n{} {}", "Detection failed:".red().bold(), e);
+                    ui::fail(&format!("{} {}", "Detection failed:", e));
                     self.print_stats();
                     return Ok(());
                 }
@@ -1015,7 +1020,7 @@ impl BaudOwl {
                 )
             })();
             if let Err(e) = res {
-                println!("\n{} {}", "Memory write failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Memory write failed:", e));
             }
             return Ok(());
         }
@@ -1045,7 +1050,7 @@ impl BaudOwl {
                 uboot::dump(&self.args.port, baud, &opts, self.running.clone())
             })();
             if let Err(e) = res {
-                println!("\n{} {}", "Dump failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Dump failed:", e));
             }
             return Ok(());
         }
@@ -1058,7 +1063,7 @@ impl BaudOwl {
                 &self.args.dump_out,
                 self.running.clone(),
             ) {
-                println!("\n{} {}", "Shell dump failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Shell dump failed:", e));
             }
             return Ok(());
         }
@@ -1079,7 +1084,7 @@ impl BaudOwl {
                 script::run_script(&self.args.port, baud, &steps, self.running.clone())
             })();
             if let Err(e) = res {
-                println!("\n{} {}", "Script failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Script failed:", e));
             }
             return Ok(());
         }
@@ -1107,7 +1112,7 @@ impl BaudOwl {
                 Some(&self.args.dump_out),
                 self.running.clone(),
             ) {
-                println!("\n{} {}", "Harvest failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Harvest failed:", e));
             }
             return Ok(());
         }
@@ -1123,7 +1128,7 @@ impl BaudOwl {
             if let Err(e) =
                 glitch::watch_and_trigger(&self.args.port, baud, &opts, self.running.clone())
             {
-                println!("\n{} {}", "Glitch watch failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Glitch watch failed:", e));
             }
             return Ok(());
         }
@@ -1138,7 +1143,7 @@ impl BaudOwl {
                 reset: self.args.sniff_reset.clone(),
             };
             if let Err(e) = sniff::sniff(&self.args.port, baud, &opts, self.running.clone()) {
-                println!("\n{} {}", "Sniff failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Sniff failed:", e));
             }
             return Ok(());
         }
@@ -1152,7 +1157,7 @@ impl BaudOwl {
                 self.args.replay_delay_ms,
                 self.running.clone(),
             ) {
-                println!("\n{} {}", "Replay failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Replay failed:", e));
             }
             return Ok(());
         }
@@ -1170,7 +1175,7 @@ impl BaudOwl {
             };
             if let Err(e) = timing::timing_attack(&self.args.port, baud, &opts, self.running.clone())
             {
-                println!("\n{} {}", "Timing attack failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Timing attack failed:", e));
             }
             return Ok(());
         }
@@ -1185,7 +1190,7 @@ impl BaudOwl {
                 &self.args.timing_marker,
                 self.running.clone(),
             ) {
-                println!("\n{} {}", "Leakage test failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Leakage test failed:", e));
             }
             return Ok(());
         }
@@ -1236,7 +1241,7 @@ impl BaudOwl {
                 proto: fuzz::Proto::parse(&self.args.fuzz_protocol),
             };
             if let Err(e) = fuzz::run_fuzz(&self.args.port, baud, &opts, self.running.clone()) {
-                println!("\n{} {}", "Fuzz failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Fuzz failed:", e));
             }
             return Ok(());
         }
@@ -1261,7 +1266,7 @@ impl BaudOwl {
                 extra_prompts: Vec::new(),
             };
             if let Err(e) = autoroot::run(&self.args.port, baud, &opts, self.running.clone()) {
-                println!("\n{} {}", "Autoroot failed:".red().bold(), e);
+                ui::fail(&format!("{} {}", "Autoroot failed:", e));
             }
             return Ok(());
         }
@@ -1279,6 +1284,9 @@ impl BaudOwl {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    if args.no_color || ui::no_color_env() {
+        ui::set_color(false);
+    }
     let mut hound = match BaudOwl::new(args) {
         Ok(b) => b,
         Err(e) => {

@@ -43,11 +43,13 @@ impl FlashSource {
         match self {
             Self::Sf => Some(format!("sf read {:#x} {:#x} {:#x}", ram, off, len)),
             Self::Nand => Some(format!("nand read {:#x} {:#x} {:#x}", ram, off, len)),
+            // len rounded up to whole 512-byte blocks. Written as div-then-adjust
+            // (not `div_ceil`, which needs Rust 1.73) and overflow-free.
             Self::Mmc => Some(format!(
                 "mmc read {:#x} {:#x} {:#x}",
                 ram,
                 off / 0x200,
-                len.div_ceil(0x200)
+                len / 0x200 + u64::from(len % 0x200 != 0)
             )),
             Self::Ram => None,
         }

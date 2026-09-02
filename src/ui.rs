@@ -22,7 +22,8 @@ pub fn set_color(enabled: bool) {
 
 /// Honour the NO_COLOR convention (https://no-color.org).
 pub fn no_color_env() -> bool {
-    std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
+    // `map_or` rather than `is_some_and` (Rust 1.70) to keep the MSRV low.
+    std::env::var_os("NO_COLOR").map_or(false, |v| !v.is_empty())
 }
 
 fn box_line(width: usize) -> String {

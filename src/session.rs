@@ -33,7 +33,7 @@ impl Session {
             .flow_control(serialport::FlowControl::None)
             .timeout(Duration::from_millis(100))
             .open()
-            .map_err(|e| io::Error::other(e.to_string()))?;
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         port.clear(serialport::ClearBuffer::All).ok();
         Ok(Self {
             port,
@@ -64,14 +64,14 @@ impl Session {
     pub fn set_dtr(&mut self, level: bool) -> io::Result<()> {
         self.port
             .write_data_terminal_ready(level)
-            .map_err(|e| io::Error::other(e.to_string()))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
     }
 
     /// Assert or release the RTS control line.
     pub fn set_rts(&mut self, level: bool) -> io::Result<()> {
         self.port
             .write_request_to_send(level)
-            .map_err(|e| io::Error::other(e.to_string()))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
     }
 
     /// Write a command followed by a carriage return (U-Boot line terminator).

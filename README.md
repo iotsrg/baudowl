@@ -35,11 +35,17 @@
 
 ### Prerequisites
 
-- **Rust** (version ≥ 1.74) - [Install via rustup](https://rustup.rs)
+- **Rust** (version ≥ 1.63). The Rust that ships in current stable distros works
+  (Debian 12 = 1.63, Ubuntu 22.04+, Fedora): `sudo apt install rustc cargo`. For a
+  newer toolchain without root, [install via rustup](https://rustup.rs).
 - **Linux Packages**:
   ```bash
   sudo apt install libudev-dev pkg-config
   ```
+
+The committed `Cargo.lock` pins a dependency set tested to build on 1.63, so
+`cargo build` on an older distro toolchain works out of the box. Do not delete it
+before building.
 
 ### Build from Source
 

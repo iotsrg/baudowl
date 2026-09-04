@@ -19,6 +19,7 @@
 - 🚨 High-speed mode (up to 4,000,000 baud)
 - 🐚 U-Boot autoroot: interrupt autoboot, inject `bootargs`, drop to a root shell
 - 🧲 Firmware extraction over UART (U-Boot `md.b`/flash read, TFTP upload, or base64 from a shell)
+- 📤 Serial file upload into RAM (U-Boot `loadx`/`loady`: XMODEM/XMODEM-1K/YMODEM)
 - 🧬 Binary protocol fingerprinting (Modbus/NMEA/MAVLink) and framing autodetect
 - 🤖 Expect-style scripting, default-credential testing, secret harvesting
 - 🔌 DTR/RTS auto-reset, serial BREAK, and glitch-trigger coordination
@@ -189,11 +190,17 @@ baudowl --baud 115200 --shell-dump /etc/shadow --dump-out shadow.txt
 
 # Patch a byte in memory (for example before bootm)
 baudowl --baud 115200 --write-mem 0x80010000 --write-value 0x90 --write-count 1
+
+# Upload a file into RAM over serial (U-Boot loadx/loady) and optionally run it
+baudowl --baud 115200 --load stub.bin --load-addr 0x80000000 --load-proto ymodem
+baudowl --baud 115200 --load payload.bin --load-proto xmodem1k --load-go "go 0x80000000"
 ```
 
 `--dump-source` is `sf` (SPI), `nand`, or `mmc`. `mmc` byte offsets are converted to 512-byte block addressing automatically.
 
 `md.b` prints ~4 ASCII chars per byte, so a full flash dump over serial takes hours (16 MB at 115200 is roughly two hours). If the board has a network stack in U-Boot, `--tftp-dump` stages the region into RAM and uploads it over Ethernet in seconds. baudowl runs the receiving TFTP server itself, so no external `tftpd` is needed; `--dump-prefill` is the classic `mw.b 0xff` safety trick so a short read is visible instead of stale RAM.
+
+`--load` is the ingress counterpart: it drives U-Boot `loadx`/`loady` and streams a local file into RAM over serial (XMODEM, XMODEM-1K, or YMODEM), no network needed. Use it to place a small RAM dumper stub, a replacement image, or a payload, then `--load-go "go <addr>"` to execute it. The transfer is CRC-checked, unlike a raw `--replay`.
 
 ### Detection
 
@@ -281,7 +288,7 @@ baudowl --baud 115200 --port /dev/ttyUSB0 --mitm --mitm-port-b /dev/ttyUSB1 \
 
 ### Verification status
 
-- **Unit-tested logic (62 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, `mw.b` pre-fill command, hostile-input self-fuzz across every parser, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting, and a loopback TFTP-receive test that reassembles a multi-block upload byte-for-byte.
+- **Unit-tested logic (67 tests):** XMODEM CRC-16 (canonical `0x31C3`) and byte-exact XMODEM/XMODEM-1K/YMODEM transfer over a loopback socket, `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, `mw.b` pre-fill command, hostile-input self-fuzz across every parser, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting, and a loopback TFTP-receive test that reassembles a multi-block upload byte-for-byte.
 - **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test, timing attack (secret recovered char-by-char), fuzzer (crash found and minimized to the trigger byte), passive sniff (capture and protocol decode), MITM bridge (forward and rewrite in transit).
 - **Verified on real hardware (ESP8266 NodeMCU, CP2102 bridge):** port access, baudrate detection, passive sniff with boot-ROM capture via `--sniff-reset`, DTR/RTS reset, and the interactive script engine (AT queries returning firmware version and `OK`).
 - **Code-complete, needs other hardware to verify:** serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.

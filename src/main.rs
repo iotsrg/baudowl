@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 mod session;
 mod autoroot;
 mod uboot;
+mod tftp;
 mod framing;
 mod script;
 mod recon;
@@ -394,6 +395,26 @@ struct Args {
     /// Output file for dumps and harvest transcripts
     #[arg(long, default_value = "dump.bin")]
     dump_out: String,
+
+    /// Pre-fill the RAM staging window with 0xFF before each flash read, so a short read shows as 0xFF not stale RAM
+    #[arg(long)]
+    dump_prefill: bool,
+
+    /// Dump flash via U-Boot tftpput to a TFTP server baudowl runs (fast; needs U-Boot networking and --tftp-server-ip)
+    #[arg(long)]
+    tftp_dump: bool,
+
+    /// This host's IP on the device network (the target uploads to it); required for --tftp-dump
+    #[arg(long, value_name = "IP")]
+    tftp_server_ip: Option<String>,
+
+    /// Device IP set with 'setenv ipaddr' (omit if the device already has one)
+    #[arg(long, value_name = "IP")]
+    tftp_device_ip: Option<String>,
+
+    /// Address baudowl's TFTP server binds for --tftp-dump (port 69 needs root/CAP_NET_BIND_SERVICE)
+    #[arg(long, default_value = "0.0.0.0:69")]
+    tftp_bind: String,
 
     /// Pull a file from an open root shell via base64 (give the remote path)
     #[arg(long, value_name = "PATH")]
@@ -1128,11 +1149,59 @@ impl BaudOwl {
                     interrupt_key: autoroot::parse_interrupt_key(&self.args.interrupt_key)?,
                     break_timeout: Duration::from_secs(self.args.break_timeout),
                     prompt: None,
+                    prefill: self.args.dump_prefill,
                 };
                 uboot::dump(&self.args.port, baud, &opts, self.running.clone())
             })();
             if let Err(e) = res {
                 ui::fail(&format!("{} {}", "Dump failed:", e));
+            }
+            return Ok(());
+        }
+
+        // Firmware dump over U-Boot TFTP (fast path for networked bootloaders).
+        if self.args.tftp_dump {
+            let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let server_ip = self
+                    .args
+                    .tftp_server_ip
+                    .clone()
+                    .ok_or("--tftp-dump requires --tftp-server-ip <this host's IP>")?;
+                let source = if self.args.dump_mem.is_some() {
+                    uboot::FlashSource::Ram
+                } else {
+                    uboot::FlashSource::parse(&self.args.dump_source).ok_or_else(|| {
+                        format!("bad --dump-source '{}' (sf|nand|mmc)", self.args.dump_source)
+                    })?
+                };
+                let offset = if let Some(addr) = &self.args.dump_mem {
+                    parse_num(addr)?
+                } else {
+                    parse_num(&self.args.dump_offset)?
+                };
+                let filename = Path::new(&self.args.dump_out)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("firmware.bin")
+                    .to_string();
+                let opts = uboot::TftpOpts {
+                    source,
+                    ram_addr: parse_num(&self.args.dump_ram_addr)?,
+                    offset,
+                    length: parse_num(&self.args.dump_length)?,
+                    out_path: self.args.dump_out.clone(),
+                    server_ip,
+                    device_ip: self.args.tftp_device_ip.clone(),
+                    bind: self.args.tftp_bind.clone(),
+                    filename,
+                    interrupt_key: autoroot::parse_interrupt_key(&self.args.interrupt_key)?,
+                    break_timeout: Duration::from_secs(self.args.break_timeout),
+                    prompt: None,
+                };
+                uboot::tftp_dump(&self.args.port, baud, &opts, self.running.clone())
+            })();
+            if let Err(e) = res {
+                ui::fail(&format!("{} {}", "TFTP dump failed:", e));
             }
             return Ok(());
         }

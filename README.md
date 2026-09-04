@@ -18,7 +18,7 @@
 - ⚡ Turbo mode for fast scanning
 - 🚨 High-speed mode (up to 4,000,000 baud)
 - 🐚 U-Boot autoroot: interrupt autoboot, inject `bootargs`, drop to a root shell
-- 🧲 Firmware extraction over UART (U-Boot `md.b`/flash read, or base64 from a shell)
+- 🧲 Firmware extraction over UART (U-Boot `md.b`/flash read, TFTP upload, or base64 from a shell)
 - 🧬 Binary protocol fingerprinting (Modbus/NMEA/MAVLink) and framing autodetect
 - 🤖 Expect-style scripting, default-credential testing, secret harvesting
 - 🔌 DTR/RTS auto-reset, serial BREAK, and glitch-trigger coordination
@@ -173,6 +173,14 @@ All of these run over the same serial line. For lab/authorized use only.
 baudowl --baud 115200 --dump-flash --dump-source sf --dump-offset 0x0 \
         --dump-length 0x100000 --dump-out firmware.bin
 
+# Same dump, but pre-fill RAM with 0xFF first so a short read shows as 0xFF
+baudowl --baud 115200 --dump-flash --dump-length 0x100000 --dump-prefill --dump-out firmware.bin
+
+# Fast path: stage into RAM, then have U-Boot push it to a TFTP server baudowl
+# runs itself (needs U-Boot networking + tftpput; port 69 needs sudo).
+sudo baudowl --baud 115200 --tftp-dump --dump-source sf --dump-length 0x1000000 \
+             --tftp-server-ip 192.168.1.10 --tftp-device-ip 192.168.1.20 --dump-out firmware.bin
+
 # Dump device RAM directly via md.b
 baudowl --baud 115200 --dump-mem 0x80000000 --dump-length 0x1000 --dump-out ram.bin
 
@@ -184,6 +192,8 @@ baudowl --baud 115200 --write-mem 0x80010000 --write-value 0x90 --write-count 1
 ```
 
 `--dump-source` is `sf` (SPI), `nand`, or `mmc`. `mmc` byte offsets are converted to 512-byte block addressing automatically.
+
+`md.b` prints ~4 ASCII chars per byte, so a full flash dump over serial takes hours (16 MB at 115200 is roughly two hours). If the board has a network stack in U-Boot, `--tftp-dump` stages the region into RAM and uploads it over Ethernet in seconds. baudowl runs the receiving TFTP server itself, so no external `tftpd` is needed; `--dump-prefill` is the classic `mw.b 0xff` safety trick so a short read is visible instead of stale RAM.
 
 ### Detection
 
@@ -271,7 +281,7 @@ baudowl --baud 115200 --port /dev/ttyUSB0 --mitm --mitm-port-b /dev/ttyUSB1 \
 
 ### Verification status
 
-- **Unit-tested logic (59 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, hostile-input self-fuzz across every parser, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting.
+- **Unit-tested logic (62 tests):** `md.b` parsing, base64, Modbus CRC16 (canonical `0x4B37`), NMEA checksum, MAVLink framing, Modbus/NMEA frame builders, overflow-safe protocol-aware fuzz generation, NMEA decode hardened against non-UTF-8 input, script parser, secret patterns, sigrok baud math, mmc block addressing, `mw.b` pre-fill command, hostile-input self-fuzz across every parser, Welch t-test and outlier statistics, PRNG determinism, delta-debugging minimization, MITM rule rewriting, idle-gap frame splitting, and a loopback TFTP-receive test that reassembles a multi-block upload byte-for-byte.
 - **Proven end-to-end against a simulated device:** autoroot, flash and RAM dump (exact byte reconstruction), base64 shell dump, credential test, timing attack (secret recovered char-by-char), fuzzer (crash found and minimized to the trigger byte), passive sniff (capture and protocol decode), MITM bridge (forward and rewrite in transit).
 - **Verified on real hardware (ESP8266 NodeMCU, CP2102 bridge):** port access, baudrate detection, passive sniff with boot-ROM capture via `--sniff-reset`, DTR/RTS reset, and the interactive script engine (AT queries returning firmware version and `OK`).
 - **Code-complete, needs other hardware to verify:** serial BREAK, glitch trigger output, framing autodetect, sigrok-cli capture.

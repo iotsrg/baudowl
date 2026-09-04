@@ -8,6 +8,7 @@
 use std::error::Error;
 use std::fs::File;
 use std::io::Write as IoWrite;
+use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -226,6 +227,16 @@ pub struct DumpOpts {
     pub interrupt_key: Vec<u8>,
     pub break_timeout: Duration,
     pub prompt: Option<String>,
+    /// Pre-fill the RAM staging window with 0xFF before each flash read, so any
+    /// bytes a short read leaves untouched show up as 0xFF instead of stale RAM.
+    pub prefill: bool,
+}
+
+/// U-Boot command that fills `len` bytes at `ram` with 0xFF. Sent before a
+/// flash read so a short/failed read is visible as a run of 0xFF in the image
+/// rather than leftover RAM contents.
+fn prefill_cmd(ram: u64, len: u64) -> String {
+    format!("mw.b {:#x} 0xff {:#x}", ram, len)
 }
 
 fn break_in(s: &mut Session, key: &[u8], extra: &[String], timeout: Duration) -> Option<String> {
@@ -275,6 +286,9 @@ pub fn dump(
         return Err("console did not echo the prompt back; aborting before dump".into());
     }
     println!("\n{} Prompt reached, starting dump...", "[*]".bold().green());
+    if opts.prefill && opts.source != FlashSource::Ram {
+        println!("{} pre-filling RAM with 0xFF before each read", "[*]".cyan());
+    }
 
     let mut file = File::create(&opts.out_path)?;
     let mut done: u64 = 0;
@@ -289,8 +303,18 @@ pub fn dump(
         // near u64::MAX, where `offset + done` would overflow.
         let cur_offset = opts.offset.saturating_add(done);
         let md_addr = if opts.source == FlashSource::Ram {
+            // Reading device RAM directly: pre-fill would destroy the target
+            // data, so it is only ever applied to the flash-staging path below.
             cur_offset
         } else {
+            if opts.prefill {
+                let _ = run_capture(
+                    &mut s,
+                    &prefill_cmd(opts.ram_addr, this),
+                    &prompt,
+                    Duration::from_secs(8),
+                );
+            }
             let cmd = opts
                 .source
                 .read_cmd(opts.ram_addr, cur_offset, this)
@@ -323,6 +347,159 @@ pub fn dump(
     ui::win(
         "FIRMWARE EXTRACTED",
         &format!("{} bytes -> {}", done, opts.out_path),
+    );
+    Ok(())
+}
+
+/// Options for a TFTP-based dump (fast path for boards with U-Boot networking).
+pub struct TftpOpts {
+    pub source: FlashSource,
+    pub ram_addr: u64,
+    pub offset: u64,
+    pub length: u64,
+    pub out_path: String,
+    /// This host's IP on the device network; the target uploads to it.
+    pub server_ip: String,
+    /// Device IP for `setenv ipaddr`; skip when the device already has one.
+    pub device_ip: Option<String>,
+    /// Address baudowl's TFTP server binds (port 69 needs privilege).
+    pub bind: String,
+    /// Filename U-Boot names in `tftpput` (cosmetic; output goes to `out_path`).
+    pub filename: String,
+    pub interrupt_key: Vec<u8>,
+    pub break_timeout: Duration,
+    pub prompt: Option<String>,
+}
+
+/// Dump flash/RAM by staging it into RAM in U-Boot and having the board push it
+/// to a TFTP server that baudowl runs itself. Orders of magnitude faster than
+/// `md.b` over serial, but needs U-Boot built with networking and `tftpput`,
+/// and the host reachable from the device over Ethernet.
+pub fn tftp_dump(
+    port: &str,
+    baud: u32,
+    opts: &TftpOpts,
+    running: Arc<AtomicBool>,
+) -> Result<(), Box<dyn Error>> {
+    println!("\n{}", "=== FIRMWARE DUMP (U-Boot TFTP) ===".bold().magenta());
+    println!(
+        "{} {} @ {} baud  source={:?} len={:#x} -> {} (via {})",
+        "Target:".cyan(),
+        port,
+        baud,
+        opts.source,
+        opts.length,
+        opts.out_path,
+        opts.server_ip
+    );
+
+    // Bind the receiver before touching the board, so the WRQ can never arrive
+    // before we are listening.
+    let sock = UdpSocket::bind(&opts.bind).map_err(|e| -> Box<dyn Error> {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!(
+                "cannot bind TFTP server on {} (port 69 is privileged: run with sudo, \
+                 or grant it with `sudo setcap cap_net_bind_service=+ep $(command -v baudowl)`): {}",
+                opts.bind, e
+            )
+            .into()
+        } else {
+            format!("cannot bind TFTP server on {}: {}", opts.bind, e).into()
+        }
+    })?;
+    println!("{} TFTP server listening on {}", "[*]".cyan(), opts.bind);
+
+    let mut s = Session::open(port, baud, running.clone())?;
+    s.echo = true;
+
+    let extra: Vec<String> = opts.prompt.iter().cloned().collect();
+    println!(
+        "{} Power-cycle the target now. Interrupting autoboot for {}s...",
+        "[*]".bold().yellow(),
+        opts.break_timeout.as_secs()
+    );
+    if break_in(&mut s, &opts.interrupt_key, &extra, opts.break_timeout).is_none() {
+        return Err("no bootloader prompt reached; wrong baud, not U-Boot, or window missed".into());
+    }
+    let prompt = opts.prompt.clone().unwrap_or_else(|| "=> ".to_string());
+    s.send_line("")?;
+    if s
+        .expect(&crate::autoroot::default_prompts(), Duration::from_secs(2))
+        .is_none()
+    {
+        return Err("console did not echo the prompt back; aborting".into());
+    }
+
+    // Network environment.
+    if let Some(dip) = &opts.device_ip {
+        let _ = run_capture(&mut s, &format!("setenv ipaddr {}", dip), &prompt, Duration::from_secs(3));
+    }
+    let _ = run_capture(
+        &mut s,
+        &format!("setenv serverip {}", opts.server_ip),
+        &prompt,
+        Duration::from_secs(3),
+    );
+
+    // Stage the region into RAM (skipped when dumping RAM directly).
+    let src_addr = if opts.source == FlashSource::Ram {
+        opts.offset
+    } else {
+        match opts.source {
+            FlashSource::Sf => {
+                let _ = run_capture(&mut s, "sf probe 0", &prompt, Duration::from_secs(5));
+            }
+            FlashSource::Mmc => {
+                let _ = run_capture(&mut s, "mmc dev 0", &prompt, Duration::from_secs(5));
+            }
+            _ => {}
+        }
+        let cmd = opts
+            .source
+            .read_cmd(opts.ram_addr, opts.offset, opts.length)
+            .ok_or("source has no read command")?;
+        println!("{} staging into RAM: {}", "[*]".cyan(), cmd);
+        let _ = run_capture(&mut s, &cmd, &prompt, Duration::from_secs(90));
+        opts.ram_addr
+    };
+
+    // Kick off the upload, then receive it.
+    let put = format!(
+        "tftpput {:#x} {:#x} {}:{}",
+        src_addr, opts.length, opts.server_ip, opts.filename
+    );
+    println!("{} {}", "[*]".bold().yellow(), put);
+    s.send_line(&put)?;
+
+    let max = opts.length.saturating_add(0x1000);
+    let received = crate::tftp::serve_wrq(
+        &sock,
+        &opts.out_path,
+        &running,
+        Duration::from_secs(45),
+        Duration::from_secs(5),
+        max,
+    )
+    .map_err(|e| -> Box<dyn Error> {
+        format!(
+            "TFTP receive failed: {} (does this U-Boot have tftpput and a reachable network?)",
+            e
+        )
+        .into()
+    })?;
+
+    // Drain any trailing U-Boot status line for the operator.
+    let _ = s.collect(Duration::from_secs(2));
+
+    if received != opts.length {
+        ui::warn(&format!(
+            "received {} bytes, expected {:#x}; image may be short",
+            received, opts.length
+        ));
+    }
+    ui::win(
+        "FIRMWARE EXTRACTED (TFTP)",
+        &format!("{} bytes -> {}", received, opts.out_path),
     );
     Ok(())
 }
@@ -420,6 +597,12 @@ mod tests {
         assert!(w.as_secs() <= 120 && w.as_secs() >= 3);
         assert_eq!(dump_window(0, 115200).as_secs(), 3);
         let _ = dump_window(u64::MAX, 1);
+    }
+
+    #[test]
+    fn prefill_cmd_format() {
+        assert_eq!(prefill_cmd(0x8000_0000, 0x1000), "mw.b 0x80000000 0xff 0x1000");
+        assert_eq!(prefill_cmd(0x8200_0000, 0x40), "mw.b 0x82000000 0xff 0x40");
     }
 
     #[test]

@@ -16,6 +16,7 @@ mod session;
 mod autoroot;
 mod uboot;
 mod tftp;
+mod xfer;
 mod framing;
 mod script;
 mod recon;
@@ -415,6 +416,22 @@ struct Args {
     /// Address baudowl's TFTP server binds for --tftp-dump (port 69 needs root/CAP_NET_BIND_SERVICE)
     #[arg(long, default_value = "0.0.0.0:69")]
     tftp_bind: String,
+
+    /// Upload a file into device RAM over serial via U-Boot loadx/loady (give the local path)
+    #[arg(long, value_name = "FILE")]
+    load: Option<String>,
+
+    /// RAM load address for --load (hex)
+    #[arg(long, default_value = "0x80000000")]
+    load_addr: String,
+
+    /// Serial transfer protocol for --load: xmodem|xmodem1k|ymodem
+    #[arg(long, default_value = "ymodem")]
+    load_proto: String,
+
+    /// After --load, run this U-Boot command (e.g. "go 0x80000000" or "bootm")
+    #[arg(long, value_name = "CMD")]
+    load_go: Option<String>,
 
     /// Pull a file from an open root shell via base64 (give the remote path)
     #[arg(long, value_name = "PATH")]
@@ -1202,6 +1219,42 @@ impl BaudOwl {
             })();
             if let Err(e) = res {
                 ui::fail(&format!("{} {}", "TFTP dump failed:", e));
+            }
+            return Ok(());
+        }
+
+        // Serial file ingress (U-Boot loadx/loady).
+        if let Some(path) = &self.args.load {
+            let res = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let data = std::fs::read(path)?;
+                if data.is_empty() {
+                    return Err("file is empty".into());
+                }
+                let mode = xfer::XferMode::parse(&self.args.load_proto).ok_or_else(|| {
+                    format!(
+                        "bad --load-proto '{}' (xmodem|xmodem1k|ymodem)",
+                        self.args.load_proto
+                    )
+                })?;
+                let filename = Path::new(path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("payload.bin")
+                    .to_string();
+                let opts = uboot::LoadOpts {
+                    data,
+                    addr: parse_num(&self.args.load_addr)?,
+                    mode,
+                    filename,
+                    go_after: self.args.load_go.clone(),
+                    interrupt_key: autoroot::parse_interrupt_key(&self.args.interrupt_key)?,
+                    break_timeout: Duration::from_secs(self.args.break_timeout),
+                    prompt: None,
+                };
+                uboot::load_file(&self.args.port, baud, opts, self.running.clone())
+            })();
+            if let Err(e) = res {
+                ui::fail(&format!("{} {}", "Load failed:", e));
             }
             return Ok(());
         }

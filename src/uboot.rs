@@ -504,6 +504,88 @@ pub fn tftp_dump(
     Ok(())
 }
 
+/// Options for uploading a file into U-Boot RAM over serial.
+pub struct LoadOpts {
+    pub data: Vec<u8>,
+    pub addr: u64,
+    pub mode: crate::xfer::XferMode,
+    pub filename: String,
+    /// U-Boot command to run after the upload (e.g. "go 0x80000000", "bootm").
+    pub go_after: Option<String>,
+    pub interrupt_key: Vec<u8>,
+    pub break_timeout: Duration,
+    pub prompt: Option<String>,
+}
+
+/// Break into U-Boot and push a file into RAM with `loadx`/`loady`, then
+/// optionally run a follow-up command. This is the serial ingress counterpart
+/// to the md.b/TFTP egress paths: load a RAM dumper stub, a replacement image,
+/// or a payload over the console alone, no network needed.
+pub fn load_file(
+    port: &str,
+    baud: u32,
+    opts: LoadOpts,
+    running: Arc<AtomicBool>,
+) -> Result<(), Box<dyn Error>> {
+    println!("\n{}", "=== SERIAL LOAD (U-Boot) ===".bold().magenta());
+    println!(
+        "{} {} @ {} baud  {} bytes -> {:#x} via {:?}",
+        "Target:".cyan(),
+        port,
+        baud,
+        opts.data.len(),
+        opts.addr,
+        opts.mode
+    );
+    let mut s = Session::open(port, baud, running.clone())?;
+    s.echo = true;
+
+    let extra: Vec<String> = opts.prompt.iter().cloned().collect();
+    println!(
+        "{} Power-cycle the target now. Interrupting autoboot for {}s...",
+        "[*]".bold().yellow(),
+        opts.break_timeout.as_secs()
+    );
+    if break_in(&mut s, &opts.interrupt_key, &extra, opts.break_timeout).is_none() {
+        return Err("no bootloader prompt reached; wrong baud, not U-Boot, or window missed".into());
+    }
+    s.send_line("")?;
+    if s
+        .expect(&crate::autoroot::default_prompts(), Duration::from_secs(2))
+        .is_none()
+    {
+        return Err("console did not echo the prompt back; aborting".into());
+    }
+
+    // Put the device into receive mode, then run the sender. The device prints
+    // a "## Ready for binary ... download" banner and then a C/NAK; the sender
+    // waits for that start byte itself, so a brief settle is enough here.
+    let recv_cmd = opts.mode.uboot_cmd(opts.addr);
+    println!("{} {}", "[*]".bold().yellow(), recv_cmd);
+    s.send_line(&recv_cmd)?;
+    s.collect(Duration::from_millis(600));
+
+    let sent = s
+        .transfer_out(&opts.data, opts.mode, &opts.filename)
+        .map_err(|e| -> Box<dyn Error> {
+            format!("serial transfer failed: {} (does this U-Boot have loadx/loady?)", e).into()
+        })?;
+
+    // Resync on the prompt after the loader returns.
+    s.expect(&crate::autoroot::default_prompts(), Duration::from_secs(5));
+    ui::win(
+        "PAYLOAD LOADED",
+        &format!("{} bytes -> {:#x}", sent, opts.addr),
+    );
+
+    if let Some(cmd) = &opts.go_after {
+        ui::danger("EXECUTING LOADED IMAGE", cmd);
+        s.send_line(cmd)?;
+        s.collect(Duration::from_secs(3));
+    }
+    Ok(())
+}
+
 /// Pull a file from an already-open root shell with `base64`, decode, and save.
 /// Assumes the device is sitting at a shell prompt (for example after
 /// `--autoroot`, or a console that is already logged in).

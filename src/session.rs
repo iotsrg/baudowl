@@ -74,6 +74,19 @@ impl Session {
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
     }
 
+    /// Push `data` to the device using an XMODEM/YMODEM sender (the counterpart
+    /// to a `loadx`/`loady` already running on the target). Returns bytes sent.
+    pub fn transfer_out(
+        &mut self,
+        data: &[u8],
+        mode: crate::xfer::XferMode,
+        filename: &str,
+    ) -> io::Result<u64> {
+        let running = self.running.clone();
+        let mut ch = crate::xfer::SerialChannel::new(&mut *self.port);
+        crate::xfer::send(&mut ch, data, mode, filename, &running)
+    }
+
     /// Write a command followed by a carriage return (U-Boot line terminator).
     pub fn send_line(&mut self, line: &str) -> io::Result<()> {
         self.port.write_all(line.as_bytes())?;

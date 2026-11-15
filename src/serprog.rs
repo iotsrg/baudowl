@@ -57,39 +57,188 @@ const SECTOR_SIZE: u32 = 4096;
 
 // ── chip database ───────────────────────────────────────────────────────
 
+const KB: u32 = 1024;
 const MB: u32 = 1024 * 1024;
 
 pub struct ChipInfo {
     pub jedec: [u8; 3],
     pub name: &'static str,
     pub size: u32,
+    pub sector_size: u32,
+    pub page_size: u32,
 }
 
 const CHIP_DB: &[ChipInfo] = &[
-    ChipInfo { jedec: [0xEF, 0x40, 0x14], name: "Winbond W25Q80", size: MB },
-    ChipInfo { jedec: [0xEF, 0x40, 0x15], name: "Winbond W25Q16", size: 2 * MB },
-    ChipInfo { jedec: [0xEF, 0x40, 0x16], name: "Winbond W25Q32", size: 4 * MB },
-    ChipInfo { jedec: [0xEF, 0x40, 0x17], name: "Winbond W25Q64", size: 8 * MB },
-    ChipInfo { jedec: [0xEF, 0x40, 0x18], name: "Winbond W25Q128", size: 16 * MB },
-    ChipInfo { jedec: [0xC2, 0x20, 0x16], name: "Macronix MX25L3206E", size: 4 * MB },
-    ChipInfo { jedec: [0xC2, 0x20, 0x17], name: "Macronix MX25L6406E", size: 8 * MB },
-    ChipInfo { jedec: [0xC2, 0x20, 0x18], name: "Macronix MX25L12835F", size: 16 * MB },
-    ChipInfo { jedec: [0xC8, 0x40, 0x15], name: "GigaDevice GD25Q16", size: 2 * MB },
-    ChipInfo { jedec: [0xC8, 0x40, 0x16], name: "GigaDevice GD25Q32", size: 4 * MB },
-    ChipInfo { jedec: [0xC8, 0x40, 0x17], name: "GigaDevice GD25Q64", size: 8 * MB },
-    ChipInfo { jedec: [0xC8, 0x40, 0x18], name: "GigaDevice GD25Q128", size: 16 * MB },
-    ChipInfo { jedec: [0x9D, 0x60, 0x16], name: "ISSI IS25LP032", size: 4 * MB },
-    ChipInfo { jedec: [0x9D, 0x60, 0x17], name: "ISSI IS25LP064", size: 8 * MB },
-    ChipInfo { jedec: [0x01, 0x60, 0x17], name: "Spansion S25FL064L", size: 8 * MB },
-    ChipInfo { jedec: [0x01, 0x60, 0x18], name: "Spansion S25FL128L", size: 16 * MB },
-    ChipInfo { jedec: [0x1C, 0x70, 0x16], name: "EON EN25QH32", size: 4 * MB },
-    ChipInfo { jedec: [0x1C, 0x70, 0x17], name: "EON EN25QH64", size: 8 * MB },
-    ChipInfo { jedec: [0x20, 0x40, 0x16], name: "XMC XM25QH32B", size: 4 * MB },
-    ChipInfo { jedec: [0x5E, 0x40, 0x16], name: "Zbit ZB25VQ32", size: 4 * MB },
-    ChipInfo { jedec: [0xBF, 0x25, 0x41], name: "SST SST25VF016B", size: 2 * MB },
-    ChipInfo { jedec: [0x1F, 0x86, 0x01], name: "Adesto AT25SF161", size: 2 * MB },
-    ChipInfo { jedec: [0x68, 0x40, 0x17], name: "Boya BY25Q64AS", size: 8 * MB },
-    ChipInfo { jedec: [0x85, 0x60, 0x16], name: "Puya P25Q32H", size: 4 * MB },
+    // ── Winbond (0xEF) ──────────────────────────────────────────────────
+    // Standard series (W25Qxx, 3.3V, type=0x40)
+    ChipInfo { jedec: [0xEF, 0x40, 0x11], name: "Winbond W25Q10CL", size: 128 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x40, 0x12], name: "Winbond W25Q20CL", size: 256 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x40, 0x13], name: "Winbond W25Q40CL", size: 512 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x40, 0x14], name: "Winbond W25Q80BV", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x40, 0x15], name: "Winbond W25Q16JV", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x40, 0x16], name: "Winbond W25Q32JV", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x40, 0x17], name: "Winbond W25Q64JV", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x40, 0x18], name: "Winbond W25Q128JV", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x40, 0x19], name: "Winbond W25Q256JV", size: 32 * MB, sector_size: 4 * KB, page_size: 256 },
+    // 1.8V series (type=0x60)
+    ChipInfo { jedec: [0xEF, 0x60, 0x15], name: "Winbond W25Q16JW", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x60, 0x16], name: "Winbond W25Q32JW", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x60, 0x17], name: "Winbond W25Q64JW", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x60, 0x18], name: "Winbond W25Q128JW", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    // JV-DTR series (type=0x70)
+    ChipInfo { jedec: [0xEF, 0x70, 0x16], name: "Winbond W25Q32JV-DTR", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x70, 0x17], name: "Winbond W25Q64JV-DTR", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xEF, 0x70, 0x18], name: "Winbond W25Q128JV-DTR", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── Macronix (0xC2) ─────────────────────────────────────────────────
+    ChipInfo { jedec: [0xC2, 0x20, 0x10], name: "Macronix MX25L512E", size: 64 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x20, 0x11], name: "Macronix MX25L1006E", size: 128 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x20, 0x12], name: "Macronix MX25L2006E", size: 256 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x20, 0x13], name: "Macronix MX25L4006E", size: 512 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x20, 0x14], name: "Macronix MX25L8006E", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x20, 0x15], name: "Macronix MX25L1606E", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x20, 0x16], name: "Macronix MX25L3206E", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x20, 0x17], name: "Macronix MX25L6406E", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x20, 0x18], name: "Macronix MX25L12835F", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x20, 0x19], name: "Macronix MX25L25635F", size: 32 * MB, sector_size: 4 * KB, page_size: 256 },
+    // 1.8V (type=0x25)
+    ChipInfo { jedec: [0xC2, 0x25, 0x16], name: "Macronix MX25U3235F", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x25, 0x17], name: "Macronix MX25U6435F", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC2, 0x25, 0x18], name: "Macronix MX25U12835F", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── GigaDevice (0xC8) ───────────────────────────────────────────────
+    ChipInfo { jedec: [0xC8, 0x40, 0x11], name: "GigaDevice GD25Q10", size: 128 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x40, 0x12], name: "GigaDevice GD25Q20", size: 256 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x40, 0x13], name: "GigaDevice GD25Q40", size: 512 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x40, 0x14], name: "GigaDevice GD25Q80", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x40, 0x15], name: "GigaDevice GD25Q16", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x40, 0x16], name: "GigaDevice GD25Q32", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x40, 0x17], name: "GigaDevice GD25Q64", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x40, 0x18], name: "GigaDevice GD25Q128", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x40, 0x19], name: "GigaDevice GD25Q256", size: 32 * MB, sector_size: 4 * KB, page_size: 256 },
+    // B series (type=0x65)
+    ChipInfo { jedec: [0xC8, 0x65, 0x17], name: "GigaDevice GD25B64E", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x65, 0x18], name: "GigaDevice GD25B128E", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x65, 0x19], name: "GigaDevice GD25B256E", size: 32 * MB, sector_size: 4 * KB, page_size: 256 },
+    // 1.8V (type=0x60)
+    ChipInfo { jedec: [0xC8, 0x60, 0x15], name: "GigaDevice GD25LQ16", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x60, 0x16], name: "GigaDevice GD25LQ32", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x60, 0x17], name: "GigaDevice GD25LQ64", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xC8, 0x60, 0x18], name: "GigaDevice GD25LQ128", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── Micron/Numonyx/ST (0x20) ────────────────────────────────────────
+    // M25P series (legacy, type=0x20)
+    ChipInfo { jedec: [0x20, 0x20, 0x14], name: "Micron M25P80", size: MB, sector_size: 64 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0x20, 0x15], name: "Micron M25P16", size: 2 * MB, sector_size: 64 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0x20, 0x16], name: "Micron M25P32", size: 4 * MB, sector_size: 64 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0x20, 0x17], name: "Micron M25P64", size: 8 * MB, sector_size: 64 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0x20, 0x18], name: "Micron M25P128", size: 16 * MB, sector_size: 64 * KB, page_size: 256 },
+    // N25Q / MT25QL series (type=0xBA 3.3V, 0xBB 1.8V)
+    ChipInfo { jedec: [0x20, 0xBA, 0x16], name: "Micron N25Q032A", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0xBA, 0x17], name: "Micron N25Q064A", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0xBA, 0x18], name: "Micron N25Q128A", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0xBA, 0x19], name: "Micron MT25QL256", size: 32 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0xBB, 0x17], name: "Micron N25Q064A (1.8V)", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0xBB, 0x18], name: "Micron N25Q128A (1.8V)", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    // XMC/XTX (also uses 0x20, type=0x40)
+    ChipInfo { jedec: [0x20, 0x40, 0x16], name: "XMC XM25QH32B", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0x40, 0x17], name: "XMC XM25QH64C", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x20, 0x40, 0x18], name: "XMC XM25QH128C", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── ISSI (0x9D) ─────────────────────────────────────────────────────
+    // LP series (3.3V, type=0x60)
+    ChipInfo { jedec: [0x9D, 0x60, 0x14], name: "ISSI IS25LP080D", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x9D, 0x60, 0x15], name: "ISSI IS25LP016D", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x9D, 0x60, 0x16], name: "ISSI IS25LP032D", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x9D, 0x60, 0x17], name: "ISSI IS25LP064D", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x9D, 0x60, 0x18], name: "ISSI IS25LP128F", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x9D, 0x60, 0x19], name: "ISSI IS25LP256E", size: 32 * MB, sector_size: 4 * KB, page_size: 256 },
+    // WP series (1.8V, type=0x70)
+    ChipInfo { jedec: [0x9D, 0x70, 0x15], name: "ISSI IS25WP016D", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x9D, 0x70, 0x16], name: "ISSI IS25WP032D", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x9D, 0x70, 0x17], name: "ISSI IS25WP064D", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x9D, 0x70, 0x18], name: "ISSI IS25WP128F", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── Spansion/Infineon/Cypress (0x01) ────────────────────────────────
+    ChipInfo { jedec: [0x01, 0x40, 0x15], name: "Spansion S25FL016K", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x01, 0x40, 0x16], name: "Spansion S25FL032K", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x01, 0x40, 0x17], name: "Spansion S25FL064K", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x01, 0x60, 0x17], name: "Spansion S25FL064L", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x01, 0x60, 0x18], name: "Spansion S25FL128L", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x01, 0x60, 0x19], name: "Spansion S25FL256L", size: 32 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── SST/Microchip (0xBF) ────────────────────────────────────────────
+    ChipInfo { jedec: [0xBF, 0x25, 0x41], name: "SST SST25VF016B", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xBF, 0x25, 0x4A], name: "SST SST25VF032B", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xBF, 0x26, 0x51], name: "SST SST26VF016B", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xBF, 0x26, 0x42], name: "SST SST26VF032B", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xBF, 0x26, 0x43], name: "SST SST26VF064B", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── EON (0x1C) ──────────────────────────────────────────────────────
+    // QH series (type=0x70)
+    ChipInfo { jedec: [0x1C, 0x70, 0x14], name: "EON EN25QH80A", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1C, 0x70, 0x15], name: "EON EN25QH16", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1C, 0x70, 0x16], name: "EON EN25QH32B", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1C, 0x70, 0x17], name: "EON EN25QH64A", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1C, 0x70, 0x18], name: "EON EN25QH128A", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+    // Q series (type=0x30)
+    ChipInfo { jedec: [0x1C, 0x30, 0x14], name: "EON EN25Q80B", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1C, 0x30, 0x15], name: "EON EN25Q16", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1C, 0x30, 0x16], name: "EON EN25Q32B", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1C, 0x30, 0x17], name: "EON EN25Q64", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── XTX (0x0B) ──────────────────────────────────────────────────────
+    ChipInfo { jedec: [0x0B, 0x40, 0x14], name: "XTX XT25F08B", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x0B, 0x40, 0x15], name: "XTX XT25F16B", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x0B, 0x40, 0x16], name: "XTX XT25F32B", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x0B, 0x40, 0x17], name: "XTX XT25F64B", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x0B, 0x40, 0x18], name: "XTX XT25F128B", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── Adesto/Atmel (0x1F) ─────────────────────────────────────────────
+    ChipInfo { jedec: [0x1F, 0x84, 0x01], name: "Adesto AT25SF041", size: 512 * KB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1F, 0x85, 0x01], name: "Adesto AT25SF081", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1F, 0x86, 0x01], name: "Adesto AT25SF161", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x1F, 0x87, 0x01], name: "Adesto AT25SF321", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── Boya (0x68) ─────────────────────────────────────────────────────
+    ChipInfo { jedec: [0x68, 0x40, 0x15], name: "Boya BY25Q16BS", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x68, 0x40, 0x16], name: "Boya BY25Q32BS", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x68, 0x40, 0x17], name: "Boya BY25Q64AS", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x68, 0x40, 0x18], name: "Boya BY25Q128AS", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── Puya (0x85) ─────────────────────────────────────────────────────
+    ChipInfo { jedec: [0x85, 0x60, 0x14], name: "Puya P25Q80H", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x85, 0x60, 0x15], name: "Puya P25Q16H", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x85, 0x60, 0x16], name: "Puya P25Q32H", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x85, 0x60, 0x17], name: "Puya P25Q64H", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x85, 0x60, 0x18], name: "Puya P25Q128H", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── Zbit (0x5E) ─────────────────────────────────────────────────────
+    ChipInfo { jedec: [0x5E, 0x40, 0x15], name: "Zbit ZB25VQ16", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x5E, 0x40, 0x16], name: "Zbit ZB25VQ32", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x5E, 0x40, 0x17], name: "Zbit ZB25VQ64", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x5E, 0x40, 0x18], name: "Zbit ZB25VQ128", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── AMIC (0x37) ─────────────────────────────────────────────────────
+    ChipInfo { jedec: [0x37, 0x30, 0x15], name: "AMIC A25L016", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x37, 0x30, 0x16], name: "AMIC A25L032", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0x37, 0x40, 0x16], name: "AMIC A25LQ032", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── BergMicro (0xE0) ────────────────────────────────────────────────
+    ChipInfo { jedec: [0xE0, 0x40, 0x16], name: "BergMicro BG25Q32A", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xE0, 0x40, 0x17], name: "BergMicro BG25Q64A", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xE0, 0x40, 0x18], name: "BergMicro BG25Q128A", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── Fudan Micro (0xA1) ──────────────────────────────────────────────
+    ChipInfo { jedec: [0xA1, 0x40, 0x14], name: "Fudan FM25Q08A", size: MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xA1, 0x40, 0x15], name: "Fudan FM25Q16A", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xA1, 0x40, 0x16], name: "Fudan FM25Q32A", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xA1, 0x40, 0x17], name: "Fudan FM25Q64A", size: 8 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xA1, 0x40, 0x18], name: "Fudan FM25Q128A", size: 16 * MB, sector_size: 4 * KB, page_size: 256 },
+
+    // ── Fidelix (0xF8) ──────────────────────────────────────────────────
+    ChipInfo { jedec: [0xF8, 0x32, 0x15], name: "Fidelix FM25Q16A", size: 2 * MB, sector_size: 4 * KB, page_size: 256 },
+    ChipInfo { jedec: [0xF8, 0x32, 0x16], name: "Fidelix FM25Q32A", size: 4 * MB, sector_size: 4 * KB, page_size: 256 },
 ];
 
 fn lookup_chip(jedec: &[u8; 3]) -> Option<&'static ChipInfo> {
@@ -97,7 +246,7 @@ fn lookup_chip(jedec: &[u8; 3]) -> Option<&'static ChipInfo> {
 }
 
 fn guess_size_from_capacity_byte(cap: u8) -> Option<u32> {
-    if cap >= 0x12 && cap <= 0x19 {
+    if cap >= 0x10 && cap <= 0x1A {
         Some(1u32 << cap)
     } else {
         None
@@ -106,21 +255,174 @@ fn guess_size_from_capacity_byte(cap: u8) -> Option<u32> {
 
 fn manufacturer_name(id: u8) -> &'static str {
     match id {
-        0xEF => "Winbond",
-        0xC2 => "Macronix",
-        0xC8 => "GigaDevice",
-        0x9D => "ISSI",
         0x01 => "Spansion/Infineon",
-        0xBF => "SST/Microchip",
+        0x0B => "XTX",
         0x1C => "EON",
-        0x20 => "XMC/XTX",
-        0x5E => "Zbit",
         0x1F => "Adesto/Atmel",
+        0x20 => "Micron/XMC",
+        0x37 => "AMIC",
+        0x5E => "Zbit",
         0x68 => "Boya",
         0x85 => "Puya",
-        0x37 => "AMIC",
+        0x9D => "ISSI",
+        0xA1 => "Fudan Micro",
+        0xBF => "SST/Microchip",
+        0xC2 => "Macronix",
+        0xC8 => "GigaDevice",
+        0xE0 => "BergMicro",
+        0xEF => "Winbond",
+        0xF8 => "Fidelix",
         _ => "Unknown",
     }
+}
+
+pub fn list_chips() {
+    println!("{}", "Supported SPI NOR flash chips:".bold().cyan());
+    println!();
+    let mut last_mfr = 0u8;
+    for c in CHIP_DB {
+        if c.jedec[0] != last_mfr {
+            if last_mfr != 0 {
+                println!();
+            }
+            println!("  {} (JEDEC {:#04x}):", manufacturer_name(c.jedec[0]).bold(), c.jedec[0]);
+            last_mfr = c.jedec[0];
+        }
+        let size_str = if c.size >= MB {
+            format!("{} MB", c.size / MB)
+        } else {
+            format!("{} KB", c.size / KB)
+        };
+        println!(
+            "    {:02X} {:02X} {:02X}  {:6}  {}",
+            c.jedec[0], c.jedec[1], c.jedec[2],
+            size_str, c.name
+        );
+    }
+    println!(
+        "\n{} chips in database. Unknown chips fall back to capacity-byte size guess.",
+        CHIP_DB.len()
+    );
+}
+
+// ── programmer profiles ─────────────────────────────────────────────────
+
+pub struct ProgrammerProfile {
+    pub name: &'static str,
+    pub pattern: &'static str,
+    pub default_baud: u32,
+    pub max_baud: u32,
+    pub notes: &'static str,
+}
+
+const PROGRAMMER_DB: &[ProgrammerProfile] = &[
+    ProgrammerProfile {
+        name: "CH341A",
+        pattern: "ch341a",
+        default_baud: 115200,
+        max_baud: 2_000_000,
+        notes: "Most common cheap SPI programmer. Use ch341a-spi-serprog or similar firmware.",
+    },
+    ProgrammerProfile {
+        name: "Bus Pirate v3",
+        pattern: "buspirate",
+        default_baud: 115200,
+        max_baud: 115200,
+        notes: "Classic hacker multi-tool. Built-in serprog. Slow but reliable.",
+    },
+    ProgrammerProfile {
+        name: "Bus Pirate 5",
+        pattern: "Bus Pirate 5",
+        default_baud: 115200,
+        max_baud: 1_000_000,
+        notes: "Newer revision with faster SPI and higher baud.",
+    },
+    ProgrammerProfile {
+        name: "Arduino (frser-duino)",
+        pattern: "frser",
+        default_baud: 115200,
+        max_baud: 115200,
+        notes: "Arduino with frser-duino or serprog firmware. Uno/Nano/Pro Mini work.",
+    },
+    ProgrammerProfile {
+        name: "ESP32 serprog",
+        pattern: "esp32",
+        default_baud: 115200,
+        max_baud: 921600,
+        notes: "ESP32 running esp32-serprog. Use --flash-baud 921600 for speed.",
+    },
+    ProgrammerProfile {
+        name: "ESP8266 serprog",
+        pattern: "esp8266",
+        default_baud: 115200,
+        max_baud: 460800,
+        notes: "ESP8266 running serprog firmware.",
+    },
+    ProgrammerProfile {
+        name: "STM32 (stm32-vserprog)",
+        pattern: "stm32",
+        default_baud: 115200,
+        max_baud: 2_000_000,
+        notes: "Blue Pill / Black Pill with stm32-vserprog. Fast SPI, high throughput.",
+    },
+    ProgrammerProfile {
+        name: "Raspberry Pi (serprog)",
+        pattern: "serprog-rpi",
+        default_baud: 115200,
+        max_baud: 2_000_000,
+        notes: "Raspberry Pi running flashrom --programmer serprog:dev=/dev/ttyAMA0.",
+    },
+    ProgrammerProfile {
+        name: "Pico serprog",
+        pattern: "pico",
+        default_baud: 115200,
+        max_baud: 921600,
+        notes: "RP2040/Pico with pico-serprog firmware.",
+    },
+    ProgrammerProfile {
+        name: "Teensy serprog",
+        pattern: "teensy",
+        default_baud: 115200,
+        max_baud: 2_000_000,
+        notes: "Teensy with frser-teensy firmware. USB ACM, baud rate ignored by hardware.",
+    },
+    ProgrammerProfile {
+        name: "Flashcat XPORT",
+        pattern: "flashcat",
+        default_baud: 3_000_000,
+        max_baud: 3_000_000,
+        notes: "Flashcat XPORT programmer. Native high speed.",
+    },
+    ProgrammerProfile {
+        name: "Hydrabus serprog",
+        pattern: "hydra",
+        default_baud: 115200,
+        max_baud: 2_000_000,
+        notes: "HydraBus multi-tool with serprog mode.",
+    },
+];
+
+fn detect_programmer(name: &str) -> Option<&'static ProgrammerProfile> {
+    let lower = name.to_ascii_lowercase();
+    PROGRAMMER_DB.iter().find(|p| lower.contains(&p.pattern.to_ascii_lowercase()))
+}
+
+pub fn list_programmers() {
+    println!("{}", "Known serprog-compatible programmers:".bold().cyan());
+    println!();
+    for p in PROGRAMMER_DB {
+        println!("  {}", p.name.bold());
+        println!(
+            "    Baud: {} (max {})",
+            p.default_baud, p.max_baud
+        );
+        println!("    {}", p.notes);
+        println!();
+    }
+    println!(
+        "Any serprog-compatible device works. These profiles provide recommended settings.\n\
+         The programmer is auto-detected from the Q_PGMNAME handshake response."
+    );
 }
 
 // ── transport helpers ───────────────────────────────────────────────────
@@ -399,7 +701,14 @@ fn erase_chip(ch: &mut dyn ByteChannel, running: &AtomicBool) -> io::Result<()> 
 
 // ── high-level flash operations ─────────────────────────────────────────
 
-fn identify(ch: &mut dyn ByteChannel) -> io::Result<(String, u32)> {
+struct FlashParams {
+    name: String,
+    size: u32,
+    sector_size: u32,
+    page_size: u32,
+}
+
+fn identify(ch: &mut dyn ByteChannel) -> io::Result<FlashParams> {
     let jedec = read_jedec_id(ch)?;
     if jedec == [0xff, 0xff, 0xff] || jedec == [0x00, 0x00, 0x00] {
         return Err(io::Error::new(
@@ -413,15 +722,25 @@ fn identify(ch: &mut dyn ByteChannel) -> io::Result<(String, u32)> {
     if let Some(chip) = lookup_chip(&jedec) {
         let sr = read_status(ch).unwrap_or(0);
         ui::found(&format!(
-            "{} ({} {} {}), JEDEC {:02X} {:02X} {:02X}, {} bytes, SR={:#04x}",
+            "{} ({} {:02X} {:02X}), JEDEC {:02X} {:02X} {:02X}, {} bytes, SR={:#04x}",
             chip.name,
             manufacturer_name(jedec[0]),
-            format!("{:#04x}", jedec[1]),
-            format!("{:#04x}", jedec[2]),
+            jedec[1], jedec[2],
             jedec[0], jedec[1], jedec[2],
             chip.size, sr,
         ));
-        Ok((chip.name.to_string(), chip.size))
+        if chip.sector_size != 4 * KB {
+            ui::detail(&format!(
+                "sector size {} KB (non-standard)",
+                chip.sector_size / KB
+            ));
+        }
+        Ok(FlashParams {
+            name: chip.name.to_string(),
+            size: chip.size,
+            sector_size: chip.sector_size,
+            page_size: chip.page_size,
+        })
     } else {
         let guessed = guess_size_from_capacity_byte(jedec[2]);
         let size = guessed.unwrap_or(0);
@@ -439,7 +758,12 @@ fn identify(ch: &mut dyn ByteChannel) -> io::Result<(String, u32)> {
                 ", cannot guess size (use --flash-size)".to_string()
             }
         ));
-        Ok((label, size))
+        Ok(FlashParams {
+            name: label,
+            size,
+            sector_size: SECTOR_SIZE,
+            page_size: PAGE_SIZE,
+        })
     }
 }
 
@@ -499,6 +823,8 @@ fn write_full(
     chip_size: u32,
     start: u32,
     data: &[u8],
+    sector_size: u32,
+    page_size: u32,
     running: &AtomicBool,
 ) -> io::Result<()> {
     let length = data.len() as u32;
@@ -513,9 +839,10 @@ fn write_full(
         ));
     }
 
-    let sector_start = start & !0xFFF;
-    let sector_end = (end + SECTOR_SIZE - 1) & !0xFFF;
-    let n_sectors = (sector_end - sector_start) / SECTOR_SIZE;
+    let sector_mask = !(sector_size - 1);
+    let sector_start = start & sector_mask;
+    let sector_end = (end + sector_size - 1) & sector_mask;
+    let n_sectors = (sector_end - sector_start) / sector_size;
     ui::step("ERASE", &format!("{} sectors ({:#x}..{:#x})", n_sectors, sector_start, sector_end));
 
     let mut addr = sector_start;
@@ -524,21 +851,21 @@ fn write_full(
             return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
         }
         erase_sector_4k(ch, addr, running)?;
-        addr += SECTOR_SIZE;
+        addr += sector_size;
     }
 
-    let n_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    let n_pages = (length + page_size - 1) / page_size;
     ui::step("PROGRAM", &format!("{} pages ({} bytes)", n_pages, length));
 
     let mut offset = 0u32;
-    let report_interval = (length / 4).max(PAGE_SIZE);
+    let report_interval = (length / 4).max(page_size);
     let mut next_report = report_interval;
 
     while offset < length {
         if !running.load(Ordering::SeqCst) {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "interrupted"));
         }
-        let page_remain = PAGE_SIZE - ((start + offset) % PAGE_SIZE);
+        let page_remain = page_size - ((start + offset) % page_size);
         let data_remain = length - offset;
         let n = page_remain.min(data_remain) as usize;
         page_program(ch, start + offset, &data[offset as usize..offset as usize + n], running)?;
@@ -624,14 +951,26 @@ pub fn serprog_flow(
         "programmer '{}', serial buffer {} bytes",
         caps.name, caps.serbuf
     ));
+    if let Some(profile) = detect_programmer(&caps.name) {
+        ui::detail(&format!(
+            "matched profile: {} (max baud {})",
+            profile.name, profile.max_baud
+        ));
+        if baud < profile.max_baud && baud <= 115200 {
+            ui::detail(&format!(
+                "tip: --flash-baud {} for faster transfers",
+                profile.max_baud
+            ));
+        }
+    }
     if caps.max_read > 0 {
         ui::detail(&format!("max read chunk: {} bytes", caps.max_read));
     }
 
     let chunk = read_chunk_size(&caps);
 
-    let (chip_name, db_size) = identify(&mut ch)?;
-    let chip_size = flash_size_override.unwrap_or(db_size);
+    let flash = identify(&mut ch)?;
+    let chip_size = flash_size_override.unwrap_or(flash.size);
     if chip_size == 0 {
         return Err("cannot determine flash size; use --flash-size <bytes>".into());
     }
@@ -642,7 +981,7 @@ pub fn serprog_flow(
     println!(
         "{} {} ({} bytes / {} KB)",
         "Flash:".cyan(),
-        chip_name,
+        flash.name,
         chip_size,
         chip_size / 1024,
     );
@@ -660,7 +999,7 @@ pub fn serprog_flow(
                 return Err("input file is empty".into());
             }
             ui::step("WRITE", &format!("{} bytes from {}", data.len(), input));
-            write_full(&mut ch, chip_size, start, &data, &running)?;
+            write_full(&mut ch, chip_size, start, &data, flash.sector_size, flash.page_size, &running)?;
             verify(&mut ch, start, &data, chunk, &running)?;
         }
         SerprogOp::Erase => {
@@ -879,9 +1218,11 @@ mod tests {
         let caps = handshake(&mut ch).unwrap();
         assert_eq!(caps.name, "baudowl-mock");
         assert_eq!(caps.serbuf, 4096);
-        let (name, size) = identify(&mut ch).unwrap();
-        assert_eq!(name, "Winbond W25Q32");
-        assert_eq!(size, 4 * MB);
+        let flash = identify(&mut ch).unwrap();
+        assert_eq!(flash.name, "Winbond W25Q32JV");
+        assert_eq!(flash.size, 4 * MB);
+        assert_eq!(flash.sector_size, 4 * KB);
+        assert_eq!(flash.page_size, 256);
         drop(ch);
         h.join().unwrap();
     }
@@ -931,7 +1272,8 @@ mod tests {
         assert_eq!(w25q32.unwrap().size, 4 * MB);
         assert!(lookup_chip(&[0xAA, 0xBB, 0xCC]).is_none());
         assert_eq!(guess_size_from_capacity_byte(0x18), Some(16 * MB));
-        assert_eq!(guess_size_from_capacity_byte(0x10), None);
+        assert_eq!(guess_size_from_capacity_byte(0x10), Some(64 * KB));
+        assert_eq!(guess_size_from_capacity_byte(0x0F), None);
     }
 
     #[test]

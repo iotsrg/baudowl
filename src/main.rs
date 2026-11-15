@@ -30,6 +30,7 @@ mod mitm;
 mod ports;
 mod ui;
 mod serprog;
+mod buspirate;
 
 /// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
@@ -705,6 +706,36 @@ struct Args {
     /// List known serprog-compatible programmers and exit
     #[arg(long)]
     list_programmers: bool,
+
+    // ── Bus Pirate 5 ──────────────────────────────────────────────
+
+    /// Use a Bus Pirate 5 as UART bridge (configure BP5, enter bridge, then run operations)
+    #[arg(long)]
+    bp: bool,
+
+    /// Enable BP5 power supply to the target (default 3.3V, override with --bp-voltage)
+    #[arg(long)]
+    bp_power: bool,
+
+    /// BP5 power supply voltage: 1.8, 2.5, 3.3, or 5.0 (default 3.3)
+    #[arg(long, default_value_t = 3.3)]
+    bp_voltage: f32,
+
+    /// Enable BP5 pull-up resistors
+    #[arg(long)]
+    bp_pullups: bool,
+
+    /// Show BP5 device info and pin voltages, then exit
+    #[arg(long)]
+    bp_info: bool,
+
+    /// Pulse BP5 AUX pin to reset the target before bridging
+    #[arg(long)]
+    bp_aux_reset: bool,
+
+    /// Scan baud rates through BP5 bridge (overrides --baud for target side)
+    #[arg(long)]
+    bp_scan: bool,
 }
 
 struct BaudOwl {
@@ -1132,6 +1163,28 @@ impl BaudOwl {
 
         if self.args.list_programmers {
             serprog::list_programmers();
+            return Ok(());
+        }
+
+        // --- Bus Pirate 5 ---
+        if self.args.bp || self.args.bp_info || self.args.bp_scan {
+            let target_baud = self.args.baud.unwrap_or(115200);
+            let opts = buspirate::BpOptions {
+                power: self.args.bp_power,
+                voltage: self.args.bp_voltage,
+                pullups: self.args.bp_pullups,
+                aux_reset: self.args.bp_aux_reset,
+                info_only: self.args.bp_info,
+                scan: self.args.bp_scan,
+            };
+            if let Err(e) = buspirate::bp_flow(
+                &self.args.port,
+                target_baud,
+                &opts,
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("BP5: {}", e));
+            }
             return Ok(());
         }
 

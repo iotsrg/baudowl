@@ -697,6 +697,14 @@ struct Args {
     /// Baud rate for the serprog programmer link (default 115200)
     #[arg(long, default_value_t = 115200)]
     flash_baud: u32,
+
+    /// List supported SPI flash chips and exit
+    #[arg(long)]
+    list_chips: bool,
+
+    /// List known serprog-compatible programmers and exit
+    #[arg(long)]
+    list_programmers: bool,
 }
 
 struct BaudOwl {
@@ -1114,6 +1122,16 @@ impl BaudOwl {
             {
                 ui::fail(&format!("{} {}", "MITM failed:", e));
             }
+            return Ok(());
+        }
+
+        if self.args.list_chips {
+            serprog::list_chips();
+            return Ok(());
+        }
+
+        if self.args.list_programmers {
+            serprog::list_programmers();
             return Ok(());
         }
 

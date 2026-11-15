@@ -29,6 +29,7 @@ mod sniff;
 mod mitm;
 mod ports;
 mod ui;
+mod serprog;
 
 /// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
@@ -659,6 +660,43 @@ struct Args {
     /// MITM rewrite rule DIR:findhex:replacehex (DIR = a2b|b2a|both), repeatable
     #[arg(long, value_name = "RULE")]
     mitm_rule: Vec<String>,
+
+    // --- Direct SPI flash (serprog protocol) ---
+    /// Identify the SPI flash chip via a serprog programmer
+    #[arg(long)]
+    flash_id: bool,
+
+    /// Read SPI flash to FILE via serprog
+    #[arg(long, value_name = "FILE")]
+    flash_read: Option<String>,
+
+    /// Write FILE to SPI flash via serprog (erases affected sectors first)
+    #[arg(long, value_name = "FILE")]
+    flash_write: Option<String>,
+
+    /// Erase the entire SPI flash chip via serprog
+    #[arg(long)]
+    flash_erase: bool,
+
+    /// Verify SPI flash contents against FILE via serprog
+    #[arg(long, value_name = "FILE")]
+    flash_verify: Option<String>,
+
+    /// Start address for flash operations (hex, default 0)
+    #[arg(long, value_name = "HEXADDR", default_value = "0")]
+    flash_start: String,
+
+    /// Length to read (hex); defaults to full chip minus start offset
+    #[arg(long, value_name = "HEXLEN")]
+    flash_length: Option<String>,
+
+    /// Override auto-detected flash size (bytes, decimal or hex with 0x prefix)
+    #[arg(long, value_name = "BYTES")]
+    flash_size: Option<String>,
+
+    /// Baud rate for the serprog programmer link (default 115200)
+    #[arg(long, default_value_t = 115200)]
+    flash_baud: u32,
 }
 
 struct BaudOwl {
@@ -1075,6 +1113,56 @@ impl BaudOwl {
                 mitm::mitm(&self.args.port, &port_b, fixed_baud, rules, self.running.clone())
             {
                 ui::fail(&format!("{} {}", "MITM failed:", e));
+            }
+            return Ok(());
+        }
+
+        // --- serprog (direct SPI flash) ---
+        if self.args.flash_id
+            || self.args.flash_read.is_some()
+            || self.args.flash_write.is_some()
+            || self.args.flash_erase
+            || self.args.flash_verify.is_some()
+        {
+            let parse_hex = |s: &str| -> Result<u32, String> {
+                let s = s.trim();
+                if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+                    u32::from_str_radix(h, 16).map_err(|e| format!("bad hex '{}': {}", s, e))
+                } else {
+                    s.parse::<u32>().map_err(|e| format!("bad number '{}': {}", s, e))
+                }
+            };
+            let start = parse_hex(&self.args.flash_start)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            let length = match &self.args.flash_length {
+                Some(s) => Some(parse_hex(s)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?),
+                None => None,
+            };
+            let size_override = match &self.args.flash_size {
+                Some(s) => Some(parse_hex(s)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?),
+                None => None,
+            };
+            let op = if let Some(ref path) = self.args.flash_read {
+                serprog::SerprogOp::Read { output: path.clone(), start, length }
+            } else if let Some(ref path) = self.args.flash_write {
+                serprog::SerprogOp::Write { input: path.clone(), start }
+            } else if self.args.flash_erase {
+                serprog::SerprogOp::Erase
+            } else if let Some(ref path) = self.args.flash_verify {
+                serprog::SerprogOp::Verify { file: path.clone(), start }
+            } else {
+                serprog::SerprogOp::Identify
+            };
+            if let Err(e) = serprog::serprog_flow(
+                &self.args.port,
+                self.args.flash_baud,
+                op,
+                size_override,
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("serprog: {}", e));
             }
             return Ok(());
         }

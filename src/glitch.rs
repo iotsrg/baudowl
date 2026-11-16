@@ -1,12 +1,3 @@
-//! Glitch-trigger coordination. Watch the serial stream for a marker and, the
-//! instant it appears, fire a trigger so a fault-injection rig can act at a
-//! known point in the boot flow. The trigger is a pulse on RTS or DTR and/or an
-//! external command (for example a ChipWhisperer script).
-//!
-//! Note: pulse width here is bounded by OS scheduler granularity. For tight
-//! glitch timing, use `--glitch-cmd` to hand off to a real timing rig; the
-//! serial line pulse is for coarse triggering.
-
 use std::error::Error;
 use std::io::Read;
 use std::process::Command;
@@ -42,8 +33,6 @@ pub struct GlitchOpts {
     pub timeout: Duration,
 }
 
-/// Watch the line until `pattern` appears, then fire the trigger. Returns
-/// `true` if the pattern was seen and the trigger fired.
 pub fn watch_and_trigger(
     port: &str,
     baud: u32,

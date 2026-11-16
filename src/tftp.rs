@@ -1,11 +1,3 @@
-//! Minimal TFTP receive server (RFC 1350, octet mode) for firmware dumps.
-//!
-//! U-Boot's `tftpput` uploads a RAM region to a TFTP server as a write request
-//! (WRQ). This implements just enough of the server side to accept one such
-//! upload and write it to a local file: WRQ -> ACK(0) -> DATA/ACK loop -> done.
-//! It never sends RRQ/read traffic. Transfer options (RFC 2347: blksize, tsize)
-//! are ignored, so the client falls back to the mandatory 512-byte block size.
-
 use std::fs::File;
 use std::io::{self, Write};
 use std::net::{SocketAddr, UdpSocket};
@@ -18,7 +10,6 @@ const OP_DATA: u16 = 3;
 const OP_ACK: u16 = 4;
 const OP_ERROR: u16 = 5;
 
-/// One 512-byte data block plus a 4-byte header; 2 KiB gives comfortable margin.
 const BUF: usize = 2048;
 
 fn other<E: Into<Box<dyn std::error::Error + Send + Sync>>>(msg: E) -> io::Error {
@@ -46,8 +37,6 @@ fn error_packet(code: u16, msg: &str) -> Vec<u8> {
     v
 }
 
-/// Read a NUL-terminated string from the front of `b` (the TFTP filename/mode
-/// fields). Returns lossily-decoded text up to the first NUL, or all of `b`.
 fn cstr(b: &[u8]) -> String {
     let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
     String::from_utf8_lossy(&b[..end]).into_owned()
@@ -61,12 +50,6 @@ fn opcode(b: &[u8]) -> Option<u16> {
     }
 }
 
-/// Receive one file uploaded via TFTP WRQ on an already-bound socket and write
-/// it to `out_path`. Returns the number of bytes written.
-///
-/// `first_wait` bounds how long to wait for the device's initial WRQ (it must
-/// ARP and start the transfer first); `block_wait` bounds each subsequent
-/// packet. `max_bytes` caps the output so a runaway sender cannot fill the disk.
 pub fn serve_wrq(
     sock: &UdpSocket,
     out_path: &str,
@@ -193,8 +176,6 @@ mod tests {
         assert_eq!(opcode(&[0, 2, 9]), Some(OP_WRQ));
     }
 
-    /// End-to-end proof: drive the server as a real TFTP client over loopback
-    /// and confirm the exact bytes land in the output file. No hardware needed.
     #[test]
     fn receives_a_full_upload_over_loopback() {
         let dir = std::env::temp_dir();

@@ -1,12 +1,3 @@
-//! serprog (Serial Programmer) protocol client for direct SPI flash access.
-//!
-//! Implements the flashrom serprog protocol, allowing baudowl to talk to
-//! serprog-compatible programmers (CH341A, Bus Pirate, Arduino, ESP32, etc.)
-//! over UART. This gives baudowl direct flash read/write/erase/verify without
-//! needing flashrom installed.
-//!
-//! Protocol reference: flashrom source, include/programmer.h (serprog opcodes).
-
 use std::error::Error;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};

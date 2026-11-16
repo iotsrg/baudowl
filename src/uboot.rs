@@ -1,10 +1,3 @@
-//! Firmware extraction over UART.
-//!
-//! From a U-Boot prompt this drives `sf read`/`nand read`/`mmc read` into RAM
-//! then `md.b` to stream the bytes out, parses the hex, and reconstructs a
-//! binary image. From a root shell it pulls a file with `base64` and decodes
-//! it. All transport is plain text over the serial line, no extra protocol.
-
 use std::error::Error;
 use std::fs::File;
 use std::io::Write as IoWrite;
@@ -18,7 +11,6 @@ use colored::*;
 use crate::ui;
 use crate::session::Session;
 
-/// Storage backend a dump reads from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlashSource {
     Sf,
@@ -38,8 +30,6 @@ impl FlashSource {
         }
     }
 
-    /// U-Boot command that loads `len` bytes at flash `off` into RAM `ram`.
-    /// `mmc` uses 512-byte block addressing, so byte values are converted.
     fn read_cmd(&self, ram: u64, off: u64, len: u64) -> Option<String> {
         match self {
             Self::Sf => Some(format!("sf read {:#x} {:#x} {:#x}", ram, off, len)),
@@ -57,11 +47,6 @@ impl FlashSource {
     }
 }
 
-/// Parse U-Boot `md.b` output into raw bytes. Data lines look like:
-///   `83f00000: 27 05 19 56 0c 2e 2f 30 ...    'W../0`
-/// The hex column is taken up to the run of 2+ spaces that precedes the ASCII
-/// gutter. Lines without a hex `address:` prefix (command echo, prompt) are
-/// skipped, so a full transcript can be passed in directly.
 pub fn parse_md_b(output: &str) -> Vec<u8> {
     let mut bytes = Vec::new();
     for line in output.lines() {
@@ -90,9 +75,6 @@ pub fn parse_md_b(output: &str) -> Vec<u8> {
     bytes
 }
 
-/// Decode standard base64 (lenient: skips whitespace and any non-alphabet
-/// byte, stops at padding). Used on a marker-delimited region, so stray
-/// console text outside the markers never reaches here.
 pub fn decode_base64(input: &str) -> Vec<u8> {
     let mut out = Vec::new();
     let mut acc: u32 = 0;
@@ -117,15 +99,12 @@ pub fn decode_base64(input: &str) -> Vec<u8> {
     out
 }
 
-/// Text between the LAST `start` marker and the next `end` after it. Using the
-/// last start skips the marker copy that appears in the echoed command line.
 fn extract_last<'a>(haystack: &'a str, start: &str, end: &str) -> Option<&'a str> {
     let s = haystack.rfind(start)? + start.len();
     let e = haystack[s..].find(end)? + s;
     Some(&haystack[s..e])
 }
 
-/// Estimate how long `len` bytes of `md.b` output takes at `baud`, with margin.
 fn dump_window(len: u64, baud: u32) -> Duration {
     // md.b prints roughly 4 chars/byte plus ~14 chars of address/ascii per line.
     // Saturating throughout: `len` comes straight from --dump-length, so a huge
@@ -139,9 +118,6 @@ fn dump_window(len: u64, baud: u32) -> Duration {
     Duration::from_secs(secs.clamp(3, 120))
 }
 
-/// Send a command and return everything the device emitted until `prompt`
-/// reappears (or `timeout`), using the full transcript so large dumps are not
-/// truncated by the matcher's sliding window.
 fn run_capture(s: &mut Session, cmd: &str, prompt: &str, timeout: Duration) -> String {
     s.start_capture();
     let _ = s.send_line(cmd);
@@ -149,7 +125,6 @@ fn run_capture(s: &mut Session, cmd: &str, prompt: &str, timeout: Duration) -> S
     String::from_utf8_lossy(&s.log).into_owned()
 }
 
-/// Read `len` bytes of device memory at `addr` via `md.b`.
 pub fn read_mem(s: &mut Session, addr: u64, len: u64, prompt: &str, baud: u32) -> Vec<u8> {
     let text = run_capture(
         s,
@@ -160,7 +135,6 @@ pub fn read_mem(s: &mut Session, addr: u64, len: u64, prompt: &str, baud: u32) -
     parse_md_b(&text)
 }
 
-/// Write `value` (one byte) `count` times at `addr` via `mw.b`.
 pub fn write_mem(s: &mut Session, addr: u64, value: u8, count: u64, prompt: &str) {
     let _ = run_capture(
         s,
@@ -170,8 +144,6 @@ pub fn write_mem(s: &mut Session, addr: u64, value: u8, count: u64, prompt: &str
     );
 }
 
-/// Break into U-Boot, confirm the console responds, then write a byte to
-/// memory (a memory-patch primitive: e.g. neuter a check before `bootm`).
 #[allow(clippy::too_many_arguments)]
 pub fn write_flow(
     port: &str,
@@ -216,7 +188,6 @@ pub fn write_flow(
     Ok(())
 }
 
-/// Options for a flash/RAM dump.
 pub struct DumpOpts {
     pub source: FlashSource,
     pub ram_addr: u64,
@@ -227,14 +198,9 @@ pub struct DumpOpts {
     pub interrupt_key: Vec<u8>,
     pub break_timeout: Duration,
     pub prompt: Option<String>,
-    /// Pre-fill the RAM staging window with 0xFF before each flash read, so any
-    /// bytes a short read leaves untouched show up as 0xFF instead of stale RAM.
     pub prefill: bool,
 }
 
-/// U-Boot command that fills `len` bytes at `ram` with 0xFF. Sent before a
-/// flash read so a short/failed read is visible as a run of 0xFF in the image
-/// rather than leftover RAM contents.
 fn prefill_cmd(ram: u64, len: u64) -> String {
     format!("mw.b {:#x} 0xff {:#x}", ram, len)
 }
@@ -246,8 +212,6 @@ fn break_in(s: &mut Session, key: &[u8], extra: &[String], timeout: Duration) ->
         .map(|(_, w)| w)
 }
 
-/// Dump flash or RAM to a file. Breaks into U-Boot first, confirms the console
-/// responds, then loops `read into RAM -> md.b -> parse -> append`.
 pub fn dump(
     port: &str,
     baud: u32,
@@ -351,30 +315,21 @@ pub fn dump(
     Ok(())
 }
 
-/// Options for a TFTP-based dump (fast path for boards with U-Boot networking).
 pub struct TftpOpts {
     pub source: FlashSource,
     pub ram_addr: u64,
     pub offset: u64,
     pub length: u64,
     pub out_path: String,
-    /// This host's IP on the device network; the target uploads to it.
     pub server_ip: String,
-    /// Device IP for `setenv ipaddr`; skip when the device already has one.
     pub device_ip: Option<String>,
-    /// Address baudowl's TFTP server binds (port 69 needs privilege).
     pub bind: String,
-    /// Filename U-Boot names in `tftpput` (cosmetic; output goes to `out_path`).
     pub filename: String,
     pub interrupt_key: Vec<u8>,
     pub break_timeout: Duration,
     pub prompt: Option<String>,
 }
 
-/// Dump flash/RAM by staging it into RAM in U-Boot and having the board push it
-/// to a TFTP server that baudowl runs itself. Orders of magnitude faster than
-/// `md.b` over serial, but needs U-Boot built with networking and `tftpput`,
-/// and the host reachable from the device over Ethernet.
 pub fn tftp_dump(
     port: &str,
     baud: u32,
@@ -504,23 +459,17 @@ pub fn tftp_dump(
     Ok(())
 }
 
-/// Options for uploading a file into U-Boot RAM over serial.
 pub struct LoadOpts {
     pub data: Vec<u8>,
     pub addr: u64,
     pub mode: crate::xfer::XferMode,
     pub filename: String,
-    /// U-Boot command to run after the upload (e.g. "go 0x80000000", "bootm").
     pub go_after: Option<String>,
     pub interrupt_key: Vec<u8>,
     pub break_timeout: Duration,
     pub prompt: Option<String>,
 }
 
-/// Break into U-Boot and push a file into RAM with `loadx`/`loady`, then
-/// optionally run a follow-up command. This is the serial ingress counterpart
-/// to the md.b/TFTP egress paths: load a RAM dumper stub, a replacement image,
-/// or a payload over the console alone, no network needed.
 pub fn load_file(
     port: &str,
     baud: u32,
@@ -586,9 +535,6 @@ pub fn load_file(
     Ok(())
 }
 
-/// Pull a file from an already-open root shell with `base64`, decode, and save.
-/// Assumes the device is sitting at a shell prompt (for example after
-/// `--autoroot`, or a console that is already logged in).
 pub fn shell_dump(
     port: &str,
     baud: u32,

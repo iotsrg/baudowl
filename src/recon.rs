@@ -1,6 +1,3 @@
-//! Console default-credential testing and post-access secret harvesting.
-//! Authorized lab targets only.
-
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,7 +8,6 @@ use colored::*;
 use crate::ui;
 use crate::session::Session;
 
-/// Well-known embedded/IoT default console credentials (user, pass).
 pub fn default_creds() -> Vec<(&'static str, &'static str)> {
     vec![
         ("root", ""),
@@ -37,9 +33,6 @@ pub fn default_creds() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// Try each credential pair against a console `login:` prompt. Returns the
-/// first pair that lands a shell prompt. Heuristic: success is a shell prompt
-/// (`#`/`$`) in the response and no fresh `login:`/`incorrect`.
 pub fn cred_brute(
     port: &str,
     baud: u32,
@@ -86,14 +79,12 @@ pub fn cred_brute(
     Ok(None)
 }
 
-/// A sensitive value spotted in console output.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Secret {
     pub category: &'static str,
     pub evidence: String,
 }
 
-/// Scan text (env dumps, config files, boot logs) for likely secrets.
 pub fn extract_secrets(text: &str) -> Vec<Secret> {
     let mut out = Vec::new();
     for raw in text.lines() {
@@ -154,8 +145,6 @@ pub fn extract_secrets(text: &str) -> Vec<Secret> {
     out
 }
 
-/// Run a fixed recon command set at an open root shell, scan the output for
-/// secrets, and optionally save the full transcript.
 pub fn harvest(
     port: &str,
     baud: u32,

@@ -1,5 +1,3 @@
-//! Serial port enumeration with USB identity (the `--list` command).
-
 use colored::*;
 use serialport::SerialPortType;
 
@@ -22,8 +20,6 @@ fn detail(t: &SerialPortType) -> String {
     }
 }
 
-/// List serial ports. By default only real plug-in devices (USB, Bluetooth);
-/// `all` also shows legacy PCI/unknown ports (the `/dev/ttyS*` noise).
 pub fn list_ports(all: bool) {
     println!("{}", "=== AVAILABLE SERIAL PORTS ===".bold().magenta());
     let ports = match serialport::available_ports() {

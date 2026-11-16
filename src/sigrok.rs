@@ -1,10 +1,3 @@
-//! Logic-analyzer-assisted baud detection via sigrok-cli.
-//!
-//! Captures raw line samples and computes baud from the narrowest pulse:
-//! `baud = samplerate / shortest_same_level_run` (the bit period). The sample
-//! math is exact and unit-tested; the capture step shells out to `sigrok-cli`
-//! and needs a supported analyzer connected to the RX line.
-
 use std::error::Error;
 use std::process::Command;
 
@@ -15,7 +8,6 @@ const STANDARD_BAUDS: &[u32] = &[
     1_000_000, 1_500_000, 2_000_000, 3_000_000,
 ];
 
-/// Snap a raw computed baud to the nearest standard rate, if within 10%.
 pub fn snap_to_standard(raw: u32) -> Option<u32> {
     STANDARD_BAUDS
         .iter()
@@ -24,9 +16,6 @@ pub fn snap_to_standard(raw: u32) -> Option<u32> {
         .filter(|&b| (b as f64 - raw as f64).abs() / (b as f64) < 0.10)
 }
 
-/// Compute baud from line-level samples (LSB = level) and the sample rate.
-/// Uses the shortest constant-level run as the bit period; the first and last
-/// (possibly partial) runs are ignored when there are enough runs.
 pub fn baud_from_samples(samples: &[u8], samplerate: u64) -> Option<u32> {
     if samples.len() < 4 || samplerate == 0 {
         return None;
@@ -73,8 +62,6 @@ fn parse_csv_samples(text: &str) -> Vec<u8> {
     v
 }
 
-/// Capture from a sigrok-supported analyzer and derive the baud. Requires
-/// `sigrok-cli` in PATH and a device on `driver` with the RX line on `channel`.
 pub fn capture_and_detect(
     driver: &str,
     samplerate: u64,

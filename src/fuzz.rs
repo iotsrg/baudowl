@@ -1,9 +1,3 @@
-//! Serial-driven fuzzer with a crash oracle, auto-reset, and test-case
-//! minimization. Sends generated/mutated input to a console or protocol
-//! parser, detects crashes from the serial output (panic strings, aborts,
-//! resets), resets the target over DTR/RTS or a command, and shrinks the
-//! crashing input to a minimal deterministic repro via delta debugging.
-
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,7 +10,6 @@ use colored::*;
 use crate::ui;
 use crate::session::Session;
 
-/// Deterministic xorshift64 PRNG so a fuzzing run is reproducible from a seed.
 pub struct Prng {
     s: u64,
 }
@@ -47,13 +40,11 @@ impl Prng {
     }
 }
 
-/// A fresh random test case of length 1..=max_len.
 pub fn gen_case(prng: &mut Prng, max_len: usize) -> Vec<u8> {
     let len = 1 + prng.below(max_len.max(1));
     (0..len).map(|_| prng.byte()).collect()
 }
 
-/// Mutate a seed input with a few random edits (set, bit flip, insert, delete).
 pub fn mutate(seed: &[u8], prng: &mut Prng, max_len: usize) -> Vec<u8> {
     if seed.is_empty() {
         return gen_case(prng, max_len);
@@ -84,7 +75,6 @@ pub fn mutate(seed: &[u8], prng: &mut Prng, max_len: usize) -> Vec<u8> {
     out
 }
 
-/// Protocol shape for structure-aware case generation.
 #[derive(Clone, Copy)]
 pub enum Proto {
     Raw,
@@ -102,8 +92,6 @@ impl Proto {
     }
 }
 
-/// Generate a protocol-shaped case: a valid frame, sometimes field-corrupted,
-/// to exercise a parser's structure handling instead of pure random bytes.
 pub fn gen_protocol_case(proto: Proto, prng: &mut Prng, max_len: usize) -> Vec<u8> {
     match proto {
         Proto::Raw => gen_case(prng, max_len),
@@ -137,7 +125,6 @@ pub fn gen_protocol_case(proto: Proto, prng: &mut Prng, max_len: usize) -> Vec<u
     }
 }
 
-/// Default substrings that indicate a target crashed/reset.
 pub fn default_crash_signatures() -> Vec<String> {
     [
         "kernel panic",
@@ -167,8 +154,6 @@ pub fn looks_like_crash(output: &str, sigs: &[String]) -> bool {
     sigs.iter().any(|s| low.contains(&s.to_ascii_lowercase()))
 }
 
-/// Delta-debug `input` down to a minimal subset for which `still_fails` is true.
-/// Removes shrinking-size chunks and keeps any removal that preserves failure.
 pub fn minimize<F: FnMut(&[u8]) -> bool>(input: &[u8], mut still_fails: F) -> Vec<u8> {
     let mut data = input.to_vec();
     let mut chunk = (data.len() / 2).max(1);
@@ -273,7 +258,6 @@ fn do_reset(s: &mut Session, mode: ResetMode, reset_cmd: &Option<String>) {
     s.collect(Duration::from_millis(300));
 }
 
-/// Run the fuzzing loop. Returns the minimized crashing inputs (deduplicated).
 pub fn run_fuzz(
     port: &str,
     baud: u32,

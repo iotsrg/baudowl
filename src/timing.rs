@@ -1,16 +1,3 @@
-//! Timing side-channel analysis over a serial console.
-//!
-//!  - `timing-attack`: recover a secret char-by-char when the device compares
-//!    it with a non-constant-time check (early-exit `strcmp`). The correct
-//!    character at each position takes measurably longer to reject.
-//!  - `leakage-test`: a TVLA-lite check that statistically decides whether two
-//!    input classes produce distinguishable response timing (Welch's t-test).
-//!
-//! Constraint: the per-character delay must exceed UART jitter. Use many
-//! samples; medians and the t-test handle the noise. Works against slow or
-//! artificially delayed checks, not microsecond-fast ones without a lot of
-//! averaging.
-
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -21,7 +8,6 @@ use colored::*;
 use crate::ui;
 use crate::session::Session;
 
-/// Summary statistics for a sample set (microseconds).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Stats {
     pub n: usize,
@@ -60,8 +46,6 @@ pub fn stats(xs: &[f64]) -> Stats {
     }
 }
 
-/// Welch's t-statistic between two samples. Large magnitude means the two
-/// timing distributions are distinguishable.
 pub fn welch_t(a: &[f64], b: &[f64]) -> f64 {
     let sa = stats(a);
     let sb = stats(b);
@@ -75,8 +59,6 @@ pub fn welch_t(a: &[f64], b: &[f64]) -> f64 {
     (sa.mean - sb.mean) / denom
 }
 
-/// Index of the value that stands out above the rest by more than `z` standard
-/// deviations of the others. None if no value is a clear outlier.
 pub fn pick_outlier(values: &[f64], z: f64) -> Option<usize> {
     if values.len() < 2 {
         return None;
@@ -109,8 +91,6 @@ pub fn pick_outlier(values: &[f64], z: f64) -> Option<usize> {
     }
 }
 
-/// Send `input` as a line and time how long until `marker` appears. Returns
-/// microseconds, or None on timeout.
 fn measure_response(
     s: &mut Session,
     input: &str,
@@ -134,7 +114,6 @@ pub struct TimingOpts {
     pub settle: Duration,
 }
 
-/// Recover a secret one character at a time by timing the console's rejection.
 pub fn timing_attack(
     port: &str,
     baud: u32,
@@ -208,7 +187,6 @@ pub fn timing_attack(
     Ok(recovered)
 }
 
-/// TVLA-lite: decide whether two input classes have distinguishable timing.
 pub fn leakage_test(
     port: &str,
     baud: u32,

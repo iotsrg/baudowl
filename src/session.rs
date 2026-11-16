@@ -1,7 +1,3 @@
-//! Interactive serial session: an expect-style engine for talking to a device
-//! over UART. Supports timed reads, pattern matching on the incoming stream,
-//! spamming a key to interrupt autoboot, and a line-buffered interactive bridge.
-
 use std::io::{self, BufRead, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -9,22 +5,16 @@ use std::time::{Duration, Instant};
 
 use serialport::SerialPort;
 
-/// Max number of decoded characters kept in the sliding match window.
 const WINDOW_CAP: usize = 8192;
 
 pub struct Session {
     port: Box<dyn SerialPort>,
     running: Arc<AtomicBool>,
-    /// Mirror device output to stdout as it arrives.
     pub echo: bool,
-    /// Transcript of bytes read from the device. Callers that only need the
-    /// output of a single operation call `start_capture()` first, which clears
-    /// it; otherwise this grows for the life of the Session.
     pub log: Vec<u8>,
 }
 
 impl Session {
-    /// Open the port at the given baudrate using 8N1, no flow control.
     pub fn open(path: &str, baud: u32, running: Arc<AtomicBool>) -> io::Result<Self> {
         let port = serialport::new(path, baud)
             .data_bits(serialport::DataBits::Eight)
@@ -47,35 +37,27 @@ impl Session {
         self.running.load(Ordering::SeqCst)
     }
 
-    /// Write raw bytes and flush (no line terminator added).
     pub fn send(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.port.write_all(bytes)?;
         self.port.flush()
     }
 
-    /// Begin a fresh capture: drop any previously logged bytes so `log` holds
-    /// only this operation's output. Bounds memory on long-running loops
-    /// (fuzzing, chunked dumps) that would otherwise retain the whole session.
     pub fn start_capture(&mut self) {
         self.log.clear();
     }
 
-    /// Assert or release the DTR control line.
     pub fn set_dtr(&mut self, level: bool) -> io::Result<()> {
         self.port
             .write_data_terminal_ready(level)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
     }
 
-    /// Assert or release the RTS control line.
     pub fn set_rts(&mut self, level: bool) -> io::Result<()> {
         self.port
             .write_request_to_send(level)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
     }
 
-    /// Push `data` to the device using an XMODEM/YMODEM sender (the counterpart
-    /// to a `loadx`/`loady` already running on the target). Returns bytes sent.
     pub fn transfer_out(
         &mut self,
         data: &[u8],
@@ -87,7 +69,6 @@ impl Session {
         crate::xfer::send(&mut ch, data, mode, filename, &running)
     }
 
-    /// Write a command followed by a carriage return (U-Boot line terminator).
     pub fn send_line(&mut self, line: &str) -> io::Result<()> {
         self.port.write_all(line.as_bytes())?;
         self.port.write_all(b"\r")?;
@@ -121,8 +102,6 @@ impl Session {
             .position(|p| lw.contains(&p.to_ascii_lowercase()))
     }
 
-    /// Read until one of `patterns` appears in the stream or `timeout` elapses.
-    /// Returns the matched index and the accumulated window text on success.
     pub fn expect(&mut self, patterns: &[String], timeout: Duration) -> Option<(usize, String)> {
         let deadline = Instant::now() + timeout;
         let mut window = String::new();
@@ -143,9 +122,6 @@ impl Session {
         None
     }
 
-    /// Spam `key` every `interval` while watching for any of `patterns`.
-    /// This is how the autoboot countdown is interrupted. Returns the matched
-    /// index and window text on success.
     pub fn spam_until(
         &mut self,
         key: &[u8],
@@ -182,7 +158,6 @@ impl Session {
         None
     }
 
-    /// Read for a fixed duration and return the decoded text seen.
     pub fn collect(&mut self, dur: Duration) -> String {
         let deadline = Instant::now() + dur;
         let mut window = String::new();
@@ -198,10 +173,6 @@ impl Session {
         window
     }
 
-    /// Read-only live view: stream device output to stdout until Ctrl-C.
-    /// Never writes to the device, so it is safe to point at a target you do
-    /// not want to disturb. Non-printable bytes are shown as '.' so a binary
-    /// stream cannot corrupt the terminal.
     pub fn monitor(&mut self, raw: bool) -> io::Result<()> {
         let mut buf = [0u8; 512];
         let mut out = io::stdout();
@@ -235,9 +206,6 @@ impl Session {
         Ok(())
     }
 
-    /// Line-buffered interactive bridge: stdin lines are sent to the device
-    /// (terminated with CR) and device output is streamed to stdout until the
-    /// running flag is cleared (Ctrl-C).
     pub fn interactive(&mut self) -> io::Result<()> {
         let mut writer = self.port.try_clone()?;
         let r = self.running.clone();

@@ -1,14 +1,3 @@
-//! Bus Pirate 5 (RP2040) integration for baudowl.
-//!
-//! Configures a Bus Pirate 5 as a UART bridge over its USB CDC port.
-//! After setup, the BP5 transparently forwards data between its IO pins
-//! and the USB serial port, so all baudowl UART operations work through
-//! it. Also provides power supply control, pull-up configuration, and
-//! voltage measurement for the target device.
-//!
-//! Protocol: text-mode command interface over USB CDC (/dev/ttyACMx).
-//! The BP5 terminal uses VT100/ANSI escape codes which we strip.
-
 use std::error::Error;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};

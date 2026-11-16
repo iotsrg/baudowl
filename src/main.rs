@@ -31,6 +31,12 @@ mod ports;
 mod ui;
 mod serprog;
 mod buspirate;
+mod esp;
+mod jtag;
+mod i2c;
+mod spi_pass;
+mod power_trace;
+mod pattern;
 
 fn validate_config_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
@@ -594,6 +600,118 @@ struct Args {
 
     #[arg(long)]
     bp_scan: bool,
+
+    // ── ESP ROM ──────────────────────────────────────────────────
+
+    #[arg(long)]
+    esp_sync: bool,
+
+    #[arg(long, value_name = "HEXADDR")]
+    esp_read_reg: Option<String>,
+
+    // ── JTAG scan ────────────────────────────────────────────────
+
+    #[arg(long)]
+    jtag_scan: bool,
+
+    #[arg(long, default_value_t = 10)]
+    jtag_tck_delay_us: u64,
+
+    #[arg(long, default_value_t = 8)]
+    jtag_chain_len: usize,
+
+    // ── I2C (Bus Pirate 5) ───────────────────────────────────────
+
+    #[arg(long)]
+    i2c_scan: bool,
+
+    #[arg(long, value_name = "HEXADDR")]
+    i2c_dump: Option<String>,
+
+    #[arg(long, default_value_t = 256)]
+    i2c_length: u32,
+
+    #[arg(long, default_value = "i2c_dump.bin")]
+    i2c_out: String,
+
+    // ── SPI passthrough (Bus Pirate 5) ───────────────────────────
+
+    #[arg(long)]
+    spi_id: bool,
+
+    #[arg(long, value_name = "FILE")]
+    spi_read: Option<String>,
+
+    #[arg(long, value_name = "HEXADDR", default_value = "0")]
+    spi_start: String,
+
+    #[arg(long, value_name = "HEXLEN")]
+    spi_length: Option<String>,
+
+    #[arg(long)]
+    spi_power: bool,
+
+    #[arg(long, default_value_t = 3.3)]
+    spi_voltage: f32,
+
+    // ── Power trace (Bus Pirate 5 ADC) ───────────────────────────
+
+    #[arg(long)]
+    power_trace: bool,
+
+    #[arg(long, default_value_t = 1000)]
+    power_duration_ms: u64,
+
+    #[arg(long)]
+    power_trigger_cmd: Option<String>,
+
+    #[arg(long, default_value = "power_trace.csv")]
+    power_out: String,
+
+    // ── Pattern inject (De Bruijn) ───────────────────────────────
+
+    #[arg(long)]
+    pattern_gen: bool,
+
+    #[arg(long)]
+    pattern_send: bool,
+
+    #[arg(long, value_name = "HEXVAL")]
+    pattern_find: Option<String>,
+
+    #[arg(long, default_value_t = 4096)]
+    pattern_length: usize,
+
+    // ── Logic capture (extended sigrok) ──────────────────────────
+
+    #[arg(long)]
+    logic_capture: bool,
+
+    #[arg(long, default_value = "D0,D1")]
+    logic_channels: String,
+
+    #[arg(long, default_value_t = 2_000_000)]
+    logic_samples: u64,
+
+    #[arg(long, default_value = "capture.sr")]
+    logic_out: String,
+
+    // ── Voltage glitch (Bus Pirate 5 power toggling) ─────────────
+
+    #[arg(long)]
+    voltage_glitch: bool,
+
+    #[arg(long, default_value_t = 50)]
+    vglitch_pulse_us: u64,
+
+    #[arg(long, default_value_t = 100)]
+    vglitch_count: u32,
+
+    #[arg(long, default_value_t = 1000)]
+    vglitch_delay_us: u64,
+
+    #[arg(long)]
+    vglitch_trigger_cmd: Option<String>,
 }
 
 struct BaudOwl {
@@ -1038,6 +1156,148 @@ impl BaudOwl {
             return Ok(());
         }
 
+        // --- ESP ROM (download mode) ---
+        if self.args.esp_sync || self.args.esp_read_reg.is_some() {
+            let op = if let Some(ref addr_str) = self.args.esp_read_reg {
+                let addr = parse_num(addr_str)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })? as u32;
+                esp::EspOp::ReadReg(addr)
+            } else {
+                esp::EspOp::Sync
+            };
+            let baud = self.args.baud.unwrap_or(115200);
+            if let Err(e) = esp::esp_flow(&self.args.port, baud, op, self.running.clone()) {
+                ui::fail(&format!("ESP: {}", e));
+            }
+            return Ok(());
+        }
+
+        // --- JTAG scan ---
+        if self.args.jtag_scan {
+            let baud = self.args.baud.unwrap_or(115200);
+            let opts = jtag::JtagScanOpts {
+                tck_delay_us: self.args.jtag_tck_delay_us,
+                chain_len: self.args.jtag_chain_len,
+            };
+            if let Err(e) = jtag::jtag_scan(&self.args.port, baud, &opts, self.running.clone()) {
+                ui::fail(&format!("JTAG: {}", e));
+            }
+            return Ok(());
+        }
+
+        // --- I2C scan / dump (Bus Pirate 5) ---
+        if self.args.i2c_scan {
+            if let Err(e) = i2c::i2c_scan(&self.args.port, self.running.clone()) {
+                ui::fail(&format!("I2C: {}", e));
+            }
+            return Ok(());
+        }
+        if let Some(ref addr_str) = self.args.i2c_dump {
+            let parse_hex_u8 = |s: &str| -> Result<u8, String> {
+                let s = s.trim();
+                if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+                    u8::from_str_radix(h, 16).map_err(|e| format!("bad hex '{}': {}", s, e))
+                } else {
+                    s.parse::<u8>().map_err(|e| format!("bad address '{}': {}", s, e))
+                }
+            };
+            let addr = parse_hex_u8(addr_str)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            if let Err(e) = i2c::i2c_dump(
+                &self.args.port,
+                addr,
+                self.args.i2c_length,
+                &self.args.i2c_out,
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("I2C: {}", e));
+            }
+            return Ok(());
+        }
+
+        // --- SPI passthrough (Bus Pirate 5) ---
+        if self.args.spi_id || self.args.spi_read.is_some() {
+            let spi_opts = spi_pass::SpiPassOpts {
+                power: self.args.spi_power,
+                voltage: self.args.spi_voltage,
+            };
+            if self.args.spi_id {
+                if let Err(e) =
+                    spi_pass::spi_identify(&self.args.port, &spi_opts, self.running.clone())
+                {
+                    ui::fail(&format!("SPI: {}", e));
+                }
+            } else if let Some(ref out_path) = self.args.spi_read {
+                let parse_hex = |s: &str| -> Result<u32, String> {
+                    let s = s.trim();
+                    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+                        u32::from_str_radix(h, 16).map_err(|e| format!("bad hex '{}': {}", s, e))
+                    } else {
+                        s.parse::<u32>().map_err(|e| format!("bad number '{}': {}", s, e))
+                    }
+                };
+                let start = parse_hex(&self.args.spi_start)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                let length = match &self.args.spi_length {
+                    Some(s) => parse_hex(s)
+                        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?,
+                    None => 0x10000, // default 64KB
+                };
+                if let Err(e) = spi_pass::spi_read(
+                    &self.args.port,
+                    &spi_opts,
+                    start,
+                    length,
+                    out_path,
+                    self.running.clone(),
+                ) {
+                    ui::fail(&format!("SPI: {}", e));
+                }
+            }
+            return Ok(());
+        }
+
+        // --- Power trace (Bus Pirate 5 ADC) ---
+        if self.args.power_trace {
+            let opts = power_trace::PowerTraceOpts {
+                duration_ms: self.args.power_duration_ms,
+                trigger_cmd: self.args.power_trigger_cmd.clone(),
+                out_path: self.args.power_out.clone(),
+            };
+            if let Err(e) =
+                power_trace::power_trace(&self.args.port, &opts, self.running.clone())
+            {
+                ui::fail(&format!("PWR: {}", e));
+            }
+            return Ok(());
+        }
+
+        // --- Pattern generate / find (no port needed) ---
+        if self.args.pattern_gen {
+            if let Err(e) = pattern::pattern_flow(
+                &self.args.port,
+                0,
+                pattern::PatternOp::Generate { length: self.args.pattern_length },
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("PATTERN: {}", e));
+            }
+            return Ok(());
+        }
+        if let Some(ref val_str) = self.args.pattern_find {
+            let val = parse_num(val_str)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })? as u32;
+            if let Err(e) = pattern::pattern_flow(
+                &self.args.port,
+                0,
+                pattern::PatternOp::Find { value: val, length: self.args.pattern_length },
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("PATTERN: {}", e));
+            }
+            return Ok(());
+        }
+
         // --- Bus Pirate 5 (bridge pre-step) ---
         if self.args.bp {
             let target_baud = self.args.baud.unwrap_or(115200);
@@ -1378,6 +1638,108 @@ impl BaudOwl {
             {
                 ui::fail(&format!("{} {}", "Glitch watch failed:", e));
             }
+            return Ok(());
+        }
+
+        // Pattern inject over UART (needs baud).
+        if self.args.pattern_send {
+            if let Err(e) = pattern::pattern_flow(
+                &self.args.port,
+                baud,
+                pattern::PatternOp::Send { length: self.args.pattern_length },
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("PATTERN: {}", e));
+            }
+            return Ok(());
+        }
+
+        // Extended sigrok logic capture (multi-channel).
+        if self.args.logic_capture {
+            if let Some(ref driver) = self.args.sigrok_driver {
+                let channels = &self.args.logic_channels;
+                let sr = self.args.sigrok_samplerate;
+                let samples = self.args.logic_samples;
+                let out = &self.args.logic_out;
+                ui::section("=== LOGIC CAPTURE ===");
+                println!("{} driver={}, channels={}, rate={}, samples={}", "Config:".cyan(), driver, channels, sr, samples);
+                let status = std::process::Command::new("sigrok-cli")
+                    .args([
+                        "-d", driver,
+                        "--config", &format!("samplerate={}", sr),
+                        "--channels", channels,
+                        "--samples", &samples.to_string(),
+                        "-o", out,
+                    ])
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {
+                        ui::win("LOGIC CAPTURE", &format!("saved to {}", out));
+                    }
+                    Ok(s) => {
+                        ui::fail(&format!("sigrok-cli exited with {}", s));
+                    }
+                    Err(e) => {
+                        ui::fail(&format!("sigrok-cli: {} (is sigrok-cli installed?)", e));
+                    }
+                }
+            } else {
+                ui::fail("--logic-capture requires --sigrok-driver");
+            }
+            return Ok(());
+        }
+
+        // Voltage glitch via BP5 power supply toggling.
+        if self.args.voltage_glitch {
+            ui::section("=== VOLTAGE GLITCH (Bus Pirate 5) ===");
+            println!("{} {} @ {} baud", "Port:".cyan(), self.args.port, baud);
+            println!(
+                "{} {} pulses, {}us on, {}us between",
+                "Config:".cyan(),
+                self.args.vglitch_count,
+                self.args.vglitch_pulse_us,
+                self.args.vglitch_delay_us,
+            );
+
+            let mut port = serialport::new(&self.args.port, 115200)
+                .timeout(Duration::from_millis(500))
+                .open()
+                .map_err(|e| format!("open {}: {}", self.args.port, e))?;
+
+            // Send trigger command if set
+            if let Some(ref cmd) = self.args.vglitch_trigger_cmd {
+                ui::step("VGLITCH", &format!("trigger: {}", cmd));
+                port.write_all(cmd.as_bytes())?;
+                port.write_all(b"\r\n")?;
+                port.flush()?;
+                std::thread::sleep(Duration::from_millis(100));
+            }
+
+            ui::step("VGLITCH", "glitching power supply");
+            let pulse = Duration::from_micros(self.args.vglitch_pulse_us);
+            let delay = Duration::from_micros(self.args.vglitch_delay_us);
+            let mut glitch_count = 0u32;
+
+            for i in 0..self.args.vglitch_count {
+                if !self.running.load(Ordering::SeqCst) {
+                    break;
+                }
+                // Power off (w = lowercase)
+                port.write_all(b"w\r\n")?;
+                port.flush()?;
+                std::thread::sleep(pulse);
+                // Power on (W = uppercase)
+                port.write_all(b"W\r\n")?;
+                port.flush()?;
+                std::thread::sleep(delay);
+                glitch_count += 1;
+
+                if (i + 1) % 10 == 0 {
+                    print!("\r{} {}/{} glitches", "[*]".bold().yellow(), i + 1, self.args.vglitch_count);
+                }
+            }
+            println!();
+            ui::win("VOLTAGE GLITCH", &format!("{} glitch pulses sent", glitch_count));
             return Ok(());
         }
 

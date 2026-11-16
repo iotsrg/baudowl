@@ -1,8 +1,3 @@
-//! UART man-in-the-middle. Bridge two serial ports (A = target, B = host),
-//! forward bytes both directions, log them, and optionally rewrite bytes in
-//! transit with directional find/replace rules. Wire the tool inline on the
-//! TX/RX pair to intercept and tamper with a live link.
-
 use std::error::Error;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,7 +23,6 @@ pub struct Rule {
     pub replace: Vec<u8>,
 }
 
-/// Replace every non-overlapping occurrence of `find` with `replace`.
 fn replace_bytes(data: &[u8], find: &[u8], rep: &[u8]) -> Vec<u8> {
     if find.is_empty() {
         return data.to_vec();
@@ -47,7 +41,6 @@ fn replace_bytes(data: &[u8], find: &[u8], rep: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Apply all rules that match `dir` (or are bidirectional) to `data`.
 pub fn apply_rules(data: &[u8], rules: &[Rule], dir: Dir) -> Vec<u8> {
     let mut out = data.to_vec();
     for r in rules {
@@ -111,7 +104,6 @@ fn pump(
     }
 }
 
-/// Bridge `port_a` and `port_b`, applying `rules` in transit.
 pub fn mitm(
     port_a: &str,
     port_b: &str,

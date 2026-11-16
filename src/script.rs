@@ -1,11 +1,3 @@
-//! A small expect-style scripting DSL run over the serial Session.
-//! One command per line; comments start with `#`:
-//!   send <text>          send text plus CR (escapes: \n \r \t \xNN)
-//!   sendraw <hex>        send raw bytes, e.g. `sendraw de ad be ef`
-//!   expect [secs] <pat>  wait for a substring (default 10s)
-//!   delay <ms>           read/drain for a fixed time
-//!   log <message>        print a line
-
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -81,8 +73,6 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-/// If `arg` starts with an integer, treat it as a seconds timeout and return
-/// the remainder as the pattern; otherwise default to 10 seconds.
 fn split_timeout(arg: &str) -> (Duration, &str) {
     if let Some((first, rest)) = arg.split_once(char::is_whitespace) {
         if let Ok(secs) = first.parse::<u64>() {

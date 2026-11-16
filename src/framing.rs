@@ -1,8 +1,3 @@
-//! Framing helpers for non-ASCII serial links:
-//!  - binary protocol fingerprinting (Modbus RTU, NMEA 0183, MAVLink) using
-//!    real CRC / checksum validation, not just magic bytes
-//!  - data-bit / parity / stop-bit combinations to try when 8N1 fails
-
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,8 +6,6 @@ use std::time::{Duration, Instant};
 use colored::*;
 use serialport::{DataBits, Parity, StopBits};
 
-/// Modbus RTU CRC-16 (poly 0xA001, init 0xFFFF), returned host-order.
-/// A valid frame has the CRC appended little-endian.
 pub fn modbus_crc16(data: &[u8]) -> u16 {
     let mut crc: u16 = 0xFFFF;
     for &b in data {
@@ -28,12 +21,10 @@ pub fn modbus_crc16(data: &[u8]) -> u16 {
     crc
 }
 
-/// XOR checksum of the bytes between `$` and `*` in an NMEA sentence.
 pub fn nmea_checksum(body: &[u8]) -> u8 {
     body.iter().fold(0u8, |a, &b| a ^ b)
 }
 
-/// Build a CRC-valid Modbus RTU frame: addr, func, data, then CRC16 (LE).
 pub fn modbus_frame(addr: u8, func: u8, data: &[u8]) -> Vec<u8> {
     let mut f = Vec::with_capacity(4 + data.len());
     f.push(addr);
@@ -44,12 +35,10 @@ pub fn modbus_frame(addr: u8, func: u8, data: &[u8]) -> Vec<u8> {
     f
 }
 
-/// Build an NMEA 0183 sentence with a valid `*HH` checksum.
 pub fn nmea_sentence(body: &str) -> String {
     format!("${}*{:02X}\r\n", body, nmea_checksum(body.as_bytes()))
 }
 
-/// True if a CRC-valid Modbus RTU frame is anchored at the start of `data`.
 fn looks_like_modbus(data: &[u8]) -> bool {
     let max = data.len().min(256);
     for end in 4..=max {
@@ -62,7 +51,6 @@ fn looks_like_modbus(data: &[u8]) -> bool {
     false
 }
 
-/// True if `data` contains an NMEA sentence whose `*HH` checksum validates.
 fn looks_like_nmea(data: &[u8]) -> bool {
     let text = String::from_utf8_lossy(data);
     for line in text.split(['\r', '\n']) {
@@ -96,9 +84,6 @@ fn looks_like_nmea(data: &[u8]) -> bool {
     false
 }
 
-/// True if a structurally plausible MAVLink v1 (0xFE) or v2 (0xFD) frame is
-/// present. CRC is not checked because it requires the message dialect's
-/// CRC_EXTRA table; this is framing-structure detection only.
 fn looks_like_mavlink(data: &[u8]) -> bool {
     let n = data.len();
     for i in 0..n {
@@ -121,8 +106,6 @@ fn looks_like_mavlink(data: &[u8]) -> bool {
     false
 }
 
-/// Fingerprint a binary serial stream. Ordered so a checksum-validated match
-/// (NMEA, Modbus) wins over the structural-only MAVLink guess.
 pub fn detect_protocol(data: &[u8]) -> Option<&'static str> {
     if data.len() < 4 {
         return None;
@@ -139,7 +122,6 @@ pub fn detect_protocol(data: &[u8]) -> Option<&'static str> {
     None
 }
 
-/// A UART line setting to try during framing autodetect.
 #[derive(Clone, Copy)]
 pub struct Framing {
     pub label: &'static str,
@@ -148,7 +130,6 @@ pub struct Framing {
     pub stop_bits: StopBits,
 }
 
-/// Common framing combinations, most likely first.
 pub fn framing_combos() -> Vec<Framing> {
     use DataBits::{Eight, Seven};
     use Parity::{Even, Odd};
@@ -164,8 +145,6 @@ pub fn framing_combos() -> Vec<Framing> {
     ]
 }
 
-/// Fraction of printable-ASCII bytes, 0..100. Cheap readability proxy used to
-/// pick the framing combo that produces the cleanest text.
 pub fn printable_score(data: &[u8]) -> u32 {
     if data.is_empty() {
         return 0;
@@ -177,9 +156,6 @@ pub fn printable_score(data: &[u8]) -> u32 {
     (printable * 100 / data.len()) as u32
 }
 
-/// Try each framing combination at a fixed baud, sample briefly, and report the
-/// one whose output is most readable. Needs a device that is actively emitting
-/// data; on a silent line every combo scores 0.
 pub fn detect_framing(
     port: &str,
     baud: u32,

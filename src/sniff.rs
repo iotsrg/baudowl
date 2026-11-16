@@ -1,8 +1,3 @@
-//! Passive UART capture and replay. `sniff` reads a line read-only, prints a
-//! timestamped hex view, splits the stream into frames by idle gaps, optionally
-//! fingerprints the protocol, and saves the raw capture. `replay` sends a saved
-//! or crafted byte log back out a port.
-
 use std::error::Error;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,9 +7,6 @@ use std::time::{Duration, Instant};
 
 use colored::*;
 
-/// Group a timestamped byte stream into frames separated by idle gaps.
-/// `events` are (microseconds-since-start, byte); a gap larger than
-/// `idle_gap_us` starts a new frame.
 pub fn split_frames(events: &[(u64, u8)], idle_gap_us: u64) -> Vec<Vec<u8>> {
     let mut frames = Vec::new();
     let mut cur = Vec::new();
@@ -55,8 +47,6 @@ pub struct SniffOpts {
     pub reset: Option<String>,
 }
 
-/// Pulse a reset on an already-open port so the same handle captures the boot
-/// output (no reset/capture race). `esp` is the esptool DTR/RTS sequence.
 fn pulse_reset(p: &mut Box<dyn serialport::SerialPort>, profile: &str) {
     match profile.to_ascii_lowercase().as_str() {
         "dtr" => {
@@ -151,7 +141,6 @@ pub fn sniff(
     Ok(())
 }
 
-/// Send the bytes of a file out the port, chunked with an inter-chunk delay.
 pub fn replay(
     port: &str,
     baud: u32,

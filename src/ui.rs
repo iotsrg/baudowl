@@ -1,26 +1,9 @@
-//! Semantic terminal output. Colour carries meaning, so an operator can tell
-//! at a glance what happened without reading the text:
-//!
-//!   win     bright green, boxed   the objective was achieved (root shell,
-//!                                 credentials, firmware, a crash)
-//!   found   green                 a positive intermediate result
-//!   fail    red                   the operation failed
-//!   danger  bright red, boxed     destructive or persistent change
-//!   warn    yellow                proceed with caution
-//!   step    cyan                  phase progress
-//!   detail  dimmed                low-signal noise (rejected guesses, etc.)
-//!
-//! Colour is disabled automatically when stdout is not a terminal, when NO_COLOR
-//! is set, or with --no-color, so redirected output stays clean text.
-
 use colored::*;
 
-/// Force colour on or off. Called once at startup from the CLI.
 pub fn set_color(enabled: bool) {
     control::set_override(enabled);
 }
 
-/// Honour the NO_COLOR convention (https://no-color.org).
 pub fn no_color_env() -> bool {
     // `map_or` rather than `is_some_and` (Rust 1.70) to keep the MSRV low.
     std::env::var_os("NO_COLOR").map_or(false, |v| !v.is_empty())
@@ -30,8 +13,6 @@ fn box_line(width: usize) -> String {
     "=".repeat(width)
 }
 
-/// The headline result. Boxed and bright green so it stands out in a long
-/// scrollback: this is what the operator was trying to achieve.
 pub fn win(title: &str, detail: &str) {
     let body = if detail.is_empty() {
         title.to_string()
@@ -45,7 +26,6 @@ pub fn win(title: &str, detail: &str) {
     println!("{}", box_line(width).bright_green().bold());
 }
 
-/// A destructive or persistent change is about to happen / just happened.
 pub fn danger(title: &str, detail: &str) {
     let body = if detail.is_empty() {
         title.to_string()
@@ -59,32 +39,26 @@ pub fn danger(title: &str, detail: &str) {
     println!("{}", box_line(width).bright_red().bold());
 }
 
-/// A positive intermediate result.
 pub fn found(msg: &str) {
     println!("{} {}", "[+]".bold().green(), msg.green());
 }
 
-/// The operation failed.
 pub fn fail(msg: &str) {
     println!("{} {}", "[!]".bold().red(), msg.red());
 }
 
-/// Something worth noticing but not fatal.
 pub fn warn(msg: &str) {
     println!("{} {}", "[!]".bold().yellow(), msg.yellow());
 }
 
-/// Phase progress. `tag` is a short marker such as "A" or "*".
 pub fn step(tag: &str, msg: &str) {
     println!("{} {}", format!("[{}]", tag).bold().cyan(), msg);
 }
 
-/// Low-signal detail: rejected guesses, per-iteration chatter.
 pub fn detail(msg: &str) {
     println!("{}", format!("    {}", msg).dimmed());
 }
 
-/// Section heading for a mode (dump, fuzz, sniff...).
 pub fn section(title: &str) {
     println!("\n{}", title.bold().magenta());
 }

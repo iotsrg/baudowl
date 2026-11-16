@@ -1,12 +1,3 @@
-//! Serial file transfer (host -> device ingress) for U-Boot `loadx`/`loady`.
-//!
-//! U-Boot receives a file into RAM with `loadx` (XMODEM) or `loady` (YMODEM);
-//! this is the matching sender. It pushes a payload, a RAM dumper stub, or a
-//! replacement image into memory over the console alone, no network needed, and
-//! far faster and integrity-checked compared with base64. The protocol runs over
-//! a `ByteChannel` so it can be exercised against a real serial port or an
-//! in-memory socket pair in tests.
-
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -20,14 +11,10 @@ const CAN: u8 = 0x18;
 const CRC_C: u8 = b'C'; // receiver requests CRC mode / next batch
 const PAD: u8 = 0x1a; // CTRL-Z pad for the final short block
 
-/// Which loader protocol to speak.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum XferMode {
-    /// 128-byte blocks (U-Boot `loadx`).
     Xmodem,
-    /// 1024-byte blocks, 128 for the remainder (U-Boot `loadx`).
     Xmodem1k,
-    /// XMODEM-1K plus a filename/size header block (U-Boot `loady`).
     Ymodem,
 }
 
@@ -40,7 +27,6 @@ impl XferMode {
             _ => None,
         }
     }
-    /// U-Boot command that makes the device receive with this protocol.
     pub fn uboot_cmd(&self, addr: u64) -> String {
         match self {
             Self::Xmodem | Self::Xmodem1k => format!("loadx {:#x}", addr),
@@ -49,16 +35,12 @@ impl XferMode {
     }
 }
 
-/// A bidirectional byte pipe with a per-read timeout. Abstracts the serial port
-/// so the transfer state machine can be unit-tested over an in-memory socket.
 pub trait ByteChannel {
-    /// Read one byte, or `None` if `timeout` elapses first.
     fn read_byte(&mut self, timeout: Duration) -> io::Result<Option<u8>>;
     fn write_all(&mut self, buf: &[u8]) -> io::Result<()>;
     fn flush(&mut self) -> io::Result<()>;
 }
 
-/// XMODEM CRC-16/CCITT (poly 0x1021, init 0x0000, no reflection).
 pub fn crc16_xmodem(data: &[u8]) -> u16 {
     let mut crc: u16 = 0;
     for &b in data {
@@ -78,8 +60,6 @@ fn checksum8(data: &[u8]) -> u8 {
     data.iter().fold(0u8, |a, &b| a.wrapping_add(b))
 }
 
-/// Build one framed block: header, block#, ~block#, payload, then CRC (2 bytes,
-/// big-endian) or 8-bit checksum. `payload` must already be 128 or 1024 bytes.
 fn frame_block(block: u8, payload: &[u8], use_crc: bool) -> Vec<u8> {
     let header = if payload.len() == 1024 { STX } else { SOH };
     let mut pkt = Vec::with_capacity(payload.len() + 5);
@@ -95,15 +75,12 @@ fn frame_block(block: u8, payload: &[u8], use_crc: bool) -> Vec<u8> {
     pkt
 }
 
-/// Pad `chunk` up to `size` (128 or 1024) with CTRL-Z.
 fn padded(chunk: &[u8], size: usize) -> Vec<u8> {
     let mut b = vec![PAD; size];
     b[..chunk.len()].copy_from_slice(chunk);
     b
 }
 
-/// Wait for the receiver's start character: `C` (CRC mode) or NAK (checksum).
-/// Other bytes (the "## Ready for binary download" banner) are ignored.
 fn wait_start(ch: &mut dyn ByteChannel, running: &AtomicBool) -> io::Result<bool> {
     let deadline = Instant::now() + Duration::from_secs(60);
     while Instant::now() < deadline {
@@ -123,7 +100,6 @@ fn wait_start(ch: &mut dyn ByteChannel, running: &AtomicBool) -> io::Result<bool
     ))
 }
 
-/// Send one block, retrying on NAK/timeout. Returns on ACK.
 fn send_block(
     ch: &mut dyn ByteChannel,
     block: u8,
@@ -161,8 +137,6 @@ fn send_eot(ch: &mut dyn ByteChannel) -> io::Result<()> {
     Err(other("no ACK for EOT"))
 }
 
-/// Chunk `data` into blocks (1024 then 128 for the tail in 1k modes) and send
-/// them starting at block number 1.
 fn send_data(
     ch: &mut dyn ByteChannel,
     data: &[u8],
@@ -190,7 +164,6 @@ fn send_data(
     Ok(())
 }
 
-/// YMODEM header block 0: "filename\0<size>\0" zero-padded to 128 bytes.
 fn ymodem_header(filename: &str, size: u64) -> Vec<u8> {
     let mut b = vec![0u8; 128];
     let name = filename.as_bytes();
@@ -204,8 +177,6 @@ fn ymodem_header(filename: &str, size: u64) -> Vec<u8> {
     b
 }
 
-/// Send `data` as `mode`. `filename` is used only for the YMODEM header.
-/// Returns the number of payload bytes sent.
 pub fn send(
     ch: &mut dyn ByteChannel,
     data: &[u8],
@@ -238,7 +209,6 @@ fn other<E: Into<Box<dyn std::error::Error + Send + Sync>>>(msg: E) -> io::Error
     io::Error::new(io::ErrorKind::Other, msg)
 }
 
-/// A `ByteChannel` over a live serial port.
 pub struct SerialChannel<'a> {
     port: &'a mut dyn serialport::SerialPort,
 }
@@ -297,7 +267,6 @@ mod tests {
         assert_eq!(big.len(), 1 + 1 + 1 + 1024 + 1); // checksum is 1 byte
     }
 
-    /// A `ByteChannel` over one end of a Unix socket pair, for the loopback test.
     struct SockChan(UnixStream);
     impl ByteChannel for SockChan {
         fn read_byte(&mut self, timeout: Duration) -> io::Result<Option<u8>> {
@@ -322,8 +291,6 @@ mod tests {
         }
     }
 
-    /// Minimal XMODEM/YMODEM receiver used only by the loopback test. Returns
-    /// the reconstructed payload (padding not trimmed).
     fn recv(stream: UnixStream, ymodem: bool) -> Vec<u8> {
         let mut s = stream;
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();

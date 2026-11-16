@@ -1,11 +1,3 @@
-//! Autoroot: interrupt U-Boot autoboot, confirm the UART responds to commands,
-//! read and rewrite `bootargs` to spawn a root shell, then boot and hand the
-//! operator an interactive session.
-//!
-//! Scope: authorized lab testing only. Volatile `setenv` by default (reversible
-//! on power cycle). `saveenv` is opt-in (`persist`). Logic level only: it stops
-//! at "you have a root shell", no payload is delivered.
-
 use std::error::Error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -16,27 +8,17 @@ use colored::*;
 use crate::ui;
 use crate::session::Session;
 
-/// Options controlling the autoroot routine.
 pub struct AutoRootOpts {
-    /// Boot argument injected to obtain a shell, e.g. `init=/bin/sh`.
     pub shell_arg: String,
-    /// Bytes spammed to interrupt the autoboot countdown.
     pub interrupt_key: Vec<u8>,
-    /// How long to spam the interrupt key while waiting for a prompt.
     pub break_timeout: Duration,
-    /// Also append the `single` (single-user) flag to bootargs.
     pub single: bool,
-    /// Command used to continue booting after setenv (usually `boot`).
     pub boot_cmd: String,
-    /// Persist env to flash with `saveenv` (dangerous, default off).
     pub persist: bool,
-    /// Print the commands that would be sent, but change nothing.
     pub dry_run: bool,
-    /// Extra prompt strings to treat as a reached bootloader prompt.
     pub extra_prompts: Vec<String>,
 }
 
-/// Bootloader prompts that indicate we have broken into a console.
 pub fn default_prompts() -> Vec<String> {
     [
         "=> ", "u-boot>", "uboot>", "cfe>", "redboot>", "ar7240>", "ath>", "rlx>",
@@ -47,7 +29,6 @@ pub fn default_prompts() -> Vec<String> {
     .collect()
 }
 
-/// Strings that indicate a usable shell has been reached after boot.
 fn shell_prompts() -> Vec<String> {
     [
         "/ #", "~ #", "# ", "root@", "busybox", "please press enter to activate",
@@ -58,10 +39,6 @@ fn shell_prompts() -> Vec<String> {
     .collect()
 }
 
-/// Boot-argument payloads that drop a device to a root shell, selectable by
-/// name via `--shell-arg <name>`. Ordered most-reliable first (replace init,
-/// no auth), then single-user / systemd targets that may prompt for a password.
-/// (name, boot argument, note)
 pub const SHELL_PRESETS: &[(&str, &str, &str)] = &[
     ("sh", "init=/bin/sh", "replace init with /bin/sh (most common, no auth; covers BusyBox /bin/sh)"),
     ("bash", "init=/bin/bash", "replace init with /bin/bash if present (no auth)"),
@@ -74,8 +51,6 @@ pub const SHELL_PRESETS: &[(&str, &str, &str)] = &[
     ("emergency", "systemd.unit=emergency.target", "systemd emergency target (usually prompts for the root password)"),
 ];
 
-/// Resolve a `--shell-arg` value: a preset name maps to its boot argument,
-/// anything else is used verbatim as a raw boot argument.
 pub fn resolve_shell_arg(input: &str) -> String {
     let key = input.trim();
     for (name, arg, _) in SHELL_PRESETS {
@@ -86,7 +61,6 @@ pub fn resolve_shell_arg(input: &str) -> String {
     key.to_string()
 }
 
-/// Print the shell boot-argument presets table.
 pub fn print_presets() {
     println!(
         "{}",
@@ -102,9 +76,6 @@ pub fn print_presets() {
     println!("quiet/splash tokens are handled automatically.");
 }
 
-/// Parse a user-supplied interrupt key spec into raw bytes.
-/// Accepts named keys (enter, space, ctrl-c, esc...) or escape sequences
-/// (`\r`, `\n`, `\x03`).
 pub fn parse_interrupt_key(s: &str) -> Result<Vec<u8>, String> {
     match s.to_ascii_lowercase().as_str() {
         "enter" | "cr" | "return" | "\\r" => return Ok(vec![0x0d]),
@@ -118,7 +89,6 @@ pub fn parse_interrupt_key(s: &str) -> Result<Vec<u8>, String> {
     parse_escaped(s)
 }
 
-/// Interpret backslash escapes in an arbitrary key string.
 fn parse_escaped(s: &str) -> Result<Vec<u8>, String> {
     let b = s.as_bytes();
     let mut out = Vec::new();
@@ -179,8 +149,6 @@ fn parse_escaped(s: &str) -> Result<Vec<u8>, String> {
     }
 }
 
-/// Pull a `key=value` line out of `printenv` output. Returns the value, or None
-/// if the variable is not present (e.g. "## Error: "bootargs" not defined").
 pub fn extract_env_value(text: &str, key: &str) -> Option<String> {
     let prefix = format!("{}=", key);
     for line in text.split('\n') {
@@ -192,10 +160,6 @@ pub fn extract_env_value(text: &str, key: &str) -> Option<String> {
     None
 }
 
-/// Rewrite a bootargs string so the kernel drops to a shell instead of running
-/// its normal init. Replaces any existing token sharing the injected key,
-/// strips `quiet`/`splash` so console output is visible, and optionally appends
-/// `single`.
 pub fn build_shell_bootargs(old: &str, shell_arg: &str, single: bool) -> String {
     let shell_arg = shell_arg.trim();
     let shell_key = shell_arg.split('=').next().unwrap_or(shell_arg);
@@ -229,7 +193,6 @@ pub fn build_shell_bootargs(old: &str, shell_arg: &str, single: bool) -> String 
     result
 }
 
-/// Run the full autoroot routine over an already-known baudrate.
 pub fn run(
     port: &str,
     baud: u32,

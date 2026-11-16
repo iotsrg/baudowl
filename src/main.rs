@@ -32,7 +32,6 @@ mod ui;
 mod serprog;
 mod buspirate;
 
-/// Validate config name contains only safe characters (alphanumeric, dash, underscore)
 fn validate_config_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("Config name cannot be empty".to_string());
@@ -46,7 +45,6 @@ fn validate_config_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Validate serial port path is a valid device path
 fn validate_port_path(port: &str) -> Result<(), String> {
     // Must start with /dev/
     if !port.starts_with("/dev/") {
@@ -68,19 +66,14 @@ fn validate_port_path(port: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// System-wide minicom profile path. `minicom <name>` reads this directly.
 fn system_minicom_path(name: &str) -> PathBuf {
     PathBuf::from(format!("/etc/minicom/minirc.{}", name))
 }
 
-/// Per-user minicom profile path. `minicom <name>` also reads
-/// `$HOME/.minirc.<name>`, so this works as a fallback when the system path is
-/// not writable.
 fn user_minicom_path(home: &Path, name: &str) -> PathBuf {
     home.join(format!(".minirc.{}", name))
 }
 
-/// Resolve the user's home directory from `$HOME` (unset or empty -> None).
 fn home_dir() -> Option<PathBuf> {
     match std::env::var_os("HOME") {
         Some(h) if !h.is_empty() => Some(PathBuf::from(h)),
@@ -88,9 +81,6 @@ fn home_dir() -> Option<PathBuf> {
     }
 }
 
-/// Whether a failed write to the system path should trigger the user-dir
-/// fallback (no permission, or a missing path we could not create) rather than
-/// being treated as a hard error.
 fn should_fall_back(err: &io::Error) -> bool {
     matches!(
         err.kind(),
@@ -98,7 +88,6 @@ fn should_fall_back(err: &io::Error) -> bool {
     )
 }
 
-/// Write `contents` to `path`, creating the parent directory if it is missing.
 fn write_config_to(path: &Path, contents: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -106,7 +95,6 @@ fn write_config_to(path: &Path, contents: &str) -> io::Result<()> {
     std::fs::write(path, contents)
 }
 
-/// Parse a hex byte string ("deadbeef" or "de ad be ef") into bytes.
 fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
     // Operate on bytes, not str slices: `s` comes from the command line and may
     // contain multibyte UTF-8, which would make a byte-indexed str slice panic
@@ -129,7 +117,6 @@ fn parse_hex_bytes(s: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-/// Parse MITM rule specs of the form DIR:findhex:replacehex.
 fn parse_mitm_rules(specs: &[String]) -> Result<Vec<mitm::Rule>, String> {
     let mut rules = Vec::new();
     for spec in specs {
@@ -156,7 +143,6 @@ fn parse_mitm_rules(specs: &[String]) -> Result<Vec<mitm::Rule>, String> {
     Ok(rules)
 }
 
-/// Parse a number that may be hex (0x...) or decimal.
 fn parse_num(s: &str) -> Result<u64, String> {
     let s = s.trim();
     if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
@@ -166,7 +152,6 @@ fn parse_num(s: &str) -> Result<u64, String> {
     }
 }
 
-/// Read up to ~1 KB from the port for `dur`, for protocol fingerprinting.
 fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) -> Vec<u8> {
     let mut data = Vec::new();
     if let Ok(mut p) = serialport::new(port, baud)
@@ -185,22 +170,6 @@ fn sample_bytes(port: &str, baud: u32, dur: Duration, running: Arc<AtomicBool>) 
     data
 }
 
-/// Score how likely `data` is a correct-baud ASCII console stream, 0-100.
-///
-/// The weights come from measurement, not intuition. A UART sampling at the
-/// wrong rate produces bytes with the high bit set very often (misaligned
-/// sampling drags start/stop bits into the data field): on a simulated U-Boot
-/// banner the correct rate yields 0% high-bit bytes while every wrong rate
-/// yields 36-47%. That single feature separates far better than anything else,
-/// so it carries real weight here.
-///
-/// Shannon entropy was evaluated and deliberately left out: on the same corpus
-/// the correct rate scored 4.73 bits/byte while wrong rates spanned 3.66-5.41,
-/// so it overlaps the true signal and would add noise rather than separation.
-///
-/// Scope: this targets ASCII console output. A correct-baud binary protocol
-/// (Modbus, MAVLink) legitimately scores low here; use --detect-protocol for
-/// those.
 fn readability_score(data: &[u8]) -> u32 {
     if data.is_empty() {
         return 0;
@@ -264,484 +233,365 @@ const BANNER: &str = r#"
     after_help = "Examples:\n  baudowl -p /dev/ttyACM0 --highspeed\n  baudowl --turbo -q\n  baudowl -n myconfig --auto\n  baudowl --baud 115200 --autoroot --dry-run"
 )]
 struct Args {
-    /// Specify serial port to use
     #[arg(short, long, default_value = "/dev/ttyUSB0")]
     port: String,
 
-    /// Set timeout period (seconds) in auto-detect mode
     #[arg(short, long, default_value_t = 5)]
     timeout: u64,
 
-    /// Minimum readability score (0-100) required to accept a baudrate
     #[arg(short = 'c', long, default_value_t = 60)]
     threshold: usize,
 
-    /// Save config as <name> and invoke Minicom (implies --auto)
     #[arg(short, long)]
     name: Option<String>,
 
-    /// Enable auto-detect mode
     #[arg(short, long)]
     auto: bool,
 
-    /// Display supported baud rates and exit
     #[arg(short, long)]
     baudlist: bool,
 
-    /// List available serial ports with USB info and exit
     #[arg(long)]
     list: bool,
 
-    /// With --list, also show legacy PCI/unknown ports (ttyS*)
     #[arg(long)]
     list_all: bool,
 
-    /// Disable coloured output (also honours the NO_COLOR env var)
     #[arg(long)]
     no_color: bool,
 
-    /// After detecting the baudrate, stay connected and stream live output
-    /// (read-only, Ctrl-C to exit)
     #[arg(short = 'm', long)]
     monitor: bool,
 
-    /// Like --monitor but two-way: type commands to the device (Ctrl-C exits)
     #[arg(short = 'i', long)]
     interactive: bool,
 
-    /// With --monitor, pass bytes through untranslated instead of masking
-    /// non-printable ones
     #[arg(long)]
     monitor_raw: bool,
 
-    /// Suppress data display (quiet mode)
     #[arg(short, long)]
     quiet: bool,
 
-    /// Enable turbo mode (faster detection)
     #[arg(long)]
     turbo: bool,
 
-    /// Enable ultra-high baudrates (1Mbps+)
     #[arg(long)]
     highspeed: bool,
 
-    /// Force a specific baudrate and skip auto-detection (e.g. --baud 115200)
     #[arg(long)]
     baud: Option<u32>,
 
-    /// Break into U-Boot, inject shell bootargs, and drop to a root shell
     #[arg(long)]
     autoroot: bool,
 
-    /// Boot argument or preset name to obtain a shell (see --list-shell-args)
     #[arg(long, default_value = "init=/bin/sh")]
     shell_arg: String,
 
-    /// Key spammed to interrupt autoboot: enter|space|ctrl-c|esc|\xNN
     #[arg(long, default_value = "enter")]
     interrupt_key: String,
 
-    /// Seconds to spam the interrupt key while waiting for a bootloader prompt
     #[arg(long, default_value_t = 30)]
     break_timeout: u64,
 
-    /// Also append the 'single' (single-user) boot flag
     #[arg(long)]
     single: bool,
 
-    /// U-Boot command used to continue booting after setenv
     #[arg(long, default_value = "boot")]
     boot_cmd: String,
 
-    /// Persist the modified env to flash with saveenv (DANGEROUS, default off)
     #[arg(long)]
     persist: bool,
 
-    /// Show the exact commands that would be sent, but do not modify or boot
     #[arg(long)]
     dry_run: bool,
 
-    /// List the built-in shell boot-argument presets and exit
     #[arg(long)]
     list_shell_args: bool,
 
     // --- Firmware extraction (U-Boot / shell) ---
-    /// Dump flash to a file over U-Boot (needs --dump-out, --dump-length)
     #[arg(long)]
     dump_flash: bool,
 
-    /// Dump device memory at this hex address over U-Boot md (needs --dump-length)
     #[arg(long, value_name = "HEXADDR")]
     dump_mem: Option<String>,
 
-    /// Flash source for --dump-flash: sf|nand|mmc
     #[arg(long, default_value = "sf")]
     dump_source: String,
 
-    /// Staging RAM address for flash reads (hex)
     #[arg(long, default_value = "0x80000000")]
     dump_ram_addr: String,
 
-    /// Flash byte offset to start dumping (hex or decimal)
     #[arg(long, default_value = "0x0")]
     dump_offset: String,
 
-    /// Number of bytes to dump (hex or decimal)
     #[arg(long, default_value = "0x10000")]
     dump_length: String,
 
-    /// Bytes per md.b chunk (hex or decimal)
     #[arg(long, default_value = "0x1000")]
     dump_chunk: String,
 
-    /// Output file for dumps and harvest transcripts
     #[arg(long, default_value = "dump.bin")]
     dump_out: String,
 
-    /// Pre-fill the RAM staging window with 0xFF before each flash read, so a short read shows as 0xFF not stale RAM
     #[arg(long)]
     dump_prefill: bool,
 
-    /// Dump flash via U-Boot tftpput to a TFTP server baudowl runs (fast; needs U-Boot networking and --tftp-server-ip)
     #[arg(long)]
     tftp_dump: bool,
 
-    /// This host's IP on the device network (the target uploads to it); required for --tftp-dump
     #[arg(long, value_name = "IP")]
     tftp_server_ip: Option<String>,
 
-    /// Device IP set with 'setenv ipaddr' (omit if the device already has one)
     #[arg(long, value_name = "IP")]
     tftp_device_ip: Option<String>,
 
-    /// Address baudowl's TFTP server binds for --tftp-dump (port 69 needs root/CAP_NET_BIND_SERVICE)
     #[arg(long, default_value = "0.0.0.0:69")]
     tftp_bind: String,
 
-    /// Upload a file into device RAM over serial via U-Boot loadx/loady (give the local path)
     #[arg(long, value_name = "FILE")]
     load: Option<String>,
 
-    /// RAM load address for --load (hex)
     #[arg(long, default_value = "0x80000000")]
     load_addr: String,
 
-    /// Serial transfer protocol for --load: xmodem|xmodem1k|ymodem
     #[arg(long, default_value = "ymodem")]
     load_proto: String,
 
-    /// After --load, run this U-Boot command (e.g. "go 0x80000000" or "bootm")
     #[arg(long, value_name = "CMD")]
     load_go: Option<String>,
 
-    /// Pull a file from an open root shell via base64 (give the remote path)
     #[arg(long, value_name = "PATH")]
     shell_dump: Option<String>,
 
-    /// Write a byte to device memory over U-Boot mw.b (give a hex address)
     #[arg(long, value_name = "HEXADDR")]
     write_mem: Option<String>,
 
-    /// Byte value for --write-mem (hex or decimal)
     #[arg(long, default_value = "0x0")]
     write_value: String,
 
-    /// Repeat count for --write-mem
     #[arg(long, default_value = "1")]
     write_count: String,
 
     // --- Detection ---
-    /// Try framing combinations (8N1/7E1/...) and report the most readable
     #[arg(long)]
     detect_framing: bool,
 
-    /// Sample the line and fingerprint a binary protocol (Modbus/NMEA/MAVLink)
     #[arg(long)]
     detect_protocol: bool,
 
     // --- Automation ---
-    /// Run an expect-style script file over the serial line
     #[arg(long, value_name = "FILE")]
     script: Option<String>,
 
-    /// Try default console credentials at a login: prompt
     #[arg(long)]
     cred_brute: bool,
 
-    /// Harvest secrets from an open root shell (transcript to --dump-out)
     #[arg(long)]
     harvest: bool,
 
     // --- Hardware triggering ---
-    /// Pulse a hardware reset over control lines: dtr|rts|esp
     #[arg(long, value_name = "PROFILE")]
     reset: Option<String>,
 
-    /// Assert a serial BREAK (Unix) for --break-ms milliseconds
     #[arg(long)]
     send_break: bool,
 
-    /// BREAK duration in milliseconds
     #[arg(long, default_value_t = 250)]
     break_ms: u64,
 
-    /// Watch for this pattern and fire a glitch trigger when it appears
     #[arg(long, value_name = "PATTERN")]
     glitch_on: Option<String>,
 
-    /// Trigger line for --glitch-on: rts|dtr|none
     #[arg(long, default_value = "rts")]
     glitch_line: String,
 
-    /// Glitch trigger pulse width in microseconds
     #[arg(long, default_value_t = 200)]
     glitch_pulse_us: u64,
 
-    /// External command to run when the glitch pattern hits
     #[arg(long)]
     glitch_cmd: Option<String>,
 
-    /// Seconds to watch for the glitch pattern
     #[arg(long, default_value_t = 60)]
     glitch_timeout: u64,
 
     // --- Logic-analyzer baud detection ---
-    /// Detect baud with a sigrok-cli analyzer (driver, e.g. fx2lafw)
     #[arg(long, value_name = "DRIVER")]
     sigrok_driver: Option<String>,
 
-    /// sigrok capture sample rate (Hz)
     #[arg(long, default_value_t = 8_000_000)]
     sigrok_samplerate: u64,
 
-    /// sigrok number of samples to capture
     #[arg(long, default_value_t = 1_000_000)]
     sigrok_samples: u64,
 
-    /// sigrok channel carrying RX
     #[arg(long, default_value = "D0")]
     sigrok_channel: String,
 
     // --- Timing side-channel ---
-    /// Recover a secret char-by-char by timing a non-constant-time console check
     #[arg(long)]
     timing_attack: bool,
 
-    /// Character set to try per position
     #[arg(long, default_value = "abcdefghijklmnopqrstuvwxyz0123456789")]
     timing_charset: String,
 
-    /// Maximum secret length to recover
     #[arg(long, default_value_t = 16)]
     timing_maxlen: usize,
 
-    /// Timing samples per candidate character
     #[arg(long, default_value_t = 20)]
     timing_samples: usize,
 
-    /// Response marker to time against (e.g. the rejection message)
     #[arg(long, default_value = "incorrect")]
     timing_marker: String,
 
-    /// Text sent before each guess (to navigate to the input)
     #[arg(long, default_value = "")]
     timing_prefix: String,
 
-    /// Outlier separation threshold (sigmas) to accept a character
     #[arg(long, default_value_t = 3.5)]
     timing_z: f64,
 
-    /// Settle time between timing samples (ms)
     #[arg(long, default_value_t = 20)]
     timing_settle_ms: u64,
 
-    /// TVLA-lite leakage test between --timing-class-a and --timing-class-b
     #[arg(long)]
     leakage_test: bool,
 
-    /// Input class A for --leakage-test
     #[arg(long, default_value = "")]
     timing_class_a: String,
 
-    /// Input class B for --leakage-test
     #[arg(long, default_value = "")]
     timing_class_b: String,
 
     // --- Serial fuzzer ---
-    /// Fuzz a console/parser, detect crashes, auto-reset, and minimize the repro
     #[arg(long)]
     fuzz: bool,
 
-    /// Seed input to mutate (text). Omit for fully random cases
     #[arg(long)]
     fuzz_seed_input: Option<String>,
 
-    /// Maximum fuzz case length
     #[arg(long, default_value_t = 64)]
     fuzz_maxlen: usize,
 
-    /// Number of fuzz iterations
     #[arg(long, default_value_t = 200)]
     fuzz_iterations: usize,
 
-    /// Per-case response window (ms)
     #[arg(long, default_value_t = 800)]
     fuzz_timeout_ms: u64,
 
-    /// Reset method between/after crashes: dtr|rts|cmd|none
     #[arg(long, default_value = "dtr")]
     fuzz_reset: String,
 
-    /// Command to send for --fuzz-reset cmd
     #[arg(long)]
     fuzz_reset_cmd: Option<String>,
 
-    /// PRNG seed for reproducible fuzzing
     #[arg(long, default_value_t = 1)]
     fuzz_seed: u64,
 
-    /// Do not append CR after each fuzz case
     #[arg(long)]
     fuzz_no_newline: bool,
 
-    /// Extra crash signature(s) to match (repeatable)
     #[arg(long)]
     fuzz_crash_sig: Vec<String>,
 
-    /// Protocol-aware fuzzing: raw|modbus|nmea
     #[arg(long, default_value = "raw")]
     fuzz_protocol: String,
 
     // --- Passive sniff / replay / MITM ---
-    /// Passively capture the line (read-only), timestamped
     #[arg(long)]
     sniff: bool,
 
-    /// Save the raw sniff capture to this file
     #[arg(long, value_name = "FILE")]
     sniff_out: Option<String>,
 
-    /// Fingerprint the protocol of the sniffed capture
     #[arg(long)]
     sniff_decode: bool,
 
-    /// Idle gap (us) that separates frames in the sniff view
     #[arg(long, default_value_t = 5000)]
     sniff_idle_us: u64,
 
-    /// Stop sniffing after this many bytes
     #[arg(long, default_value_t = 65536)]
     sniff_max: usize,
 
-    /// Pulse a reset (dtr|rts|esp) right after opening, to capture boot output
     #[arg(long, value_name = "PROFILE")]
     sniff_reset: Option<String>,
 
-    /// Replay the bytes of a file out the port
     #[arg(long, value_name = "FILE")]
     replay: Option<String>,
 
-    /// Replay chunk size
     #[arg(long, default_value_t = 64)]
     replay_chunk: usize,
 
-    /// Delay between replay chunks (ms)
     #[arg(long, default_value_t = 10)]
     replay_delay_ms: u64,
 
-    /// Man-in-the-middle bridge between --port (A) and --mitm-port-b (B)
     #[arg(long)]
     mitm: bool,
 
-    /// Second port for --mitm (the host side)
     #[arg(long, value_name = "PORT")]
     mitm_port_b: Option<String>,
 
-    /// MITM rewrite rule DIR:findhex:replacehex (DIR = a2b|b2a|both), repeatable
     #[arg(long, value_name = "RULE")]
     mitm_rule: Vec<String>,
 
     // --- Direct SPI flash (serprog protocol) ---
-    /// Identify the SPI flash chip via a serprog programmer
     #[arg(long)]
     flash_id: bool,
 
-    /// Read SPI flash to FILE via serprog
     #[arg(long, value_name = "FILE")]
     flash_read: Option<String>,
 
-    /// Write FILE to SPI flash via serprog (erases affected sectors first)
     #[arg(long, value_name = "FILE")]
     flash_write: Option<String>,
 
-    /// Erase the entire SPI flash chip via serprog
     #[arg(long)]
     flash_erase: bool,
 
-    /// Verify SPI flash contents against FILE via serprog
     #[arg(long, value_name = "FILE")]
     flash_verify: Option<String>,
 
-    /// Start address for flash operations (hex, default 0)
     #[arg(long, value_name = "HEXADDR", default_value = "0")]
     flash_start: String,
 
-    /// Length to read (hex); defaults to full chip minus start offset
     #[arg(long, value_name = "HEXLEN")]
     flash_length: Option<String>,
 
-    /// Override auto-detected flash size (bytes, decimal or hex with 0x prefix)
     #[arg(long, value_name = "BYTES")]
     flash_size: Option<String>,
 
-    /// Override sector erase size in bytes (default 4096; Micron M25P uses 65536)
     #[arg(long, value_name = "BYTES")]
     flash_sector_size: Option<String>,
 
-    /// Override page program size in bytes (default 256)
     #[arg(long, value_name = "BYTES")]
     flash_page_size: Option<String>,
 
-    /// Baud rate for the serprog programmer link (default 115200)
     #[arg(long, default_value_t = 115200)]
     flash_baud: u32,
 
-    /// List supported SPI flash chips and exit
     #[arg(long)]
     list_chips: bool,
 
-    /// List known serprog-compatible programmers and exit
     #[arg(long)]
     list_programmers: bool,
 
     // ── Bus Pirate 5 ──────────────────────────────────────────────
 
-    /// Use a Bus Pirate 5 as UART bridge (configure BP5, enter bridge, then run operations)
     #[arg(long)]
     bp: bool,
 
-    /// Enable BP5 power supply to the target (default 3.3V, override with --bp-voltage)
     #[arg(long)]
     bp_power: bool,
 
-    /// BP5 power supply voltage: 1.8, 2.5, 3.3, or 5.0 (default 3.3)
     #[arg(long, default_value_t = 3.3)]
     bp_voltage: f32,
 
-    /// Enable BP5 pull-up resistors
     #[arg(long)]
     bp_pullups: bool,
 
-    /// Show BP5 device info and pin voltages, then exit
     #[arg(long)]
     bp_info: bool,
 
-    /// Pulse BP5 AUX pin to reset the target before bridging
     #[arg(long)]
     bp_aux_reset: bool,
 
-    /// Scan baud rates through BP5 bridge (overrides --baud for target side)
     #[arg(long)]
     bp_scan: bool,
 }
@@ -1812,9 +1662,6 @@ mod tests {
         assert_eq!(parse_hex_bytes("de ad").unwrap(), vec![0xde, 0xad]);
     }
 
-    /// Self-fuzz: throw pseudorandom and adversarial bytes at every text parser
-    /// in the crate. None of them may panic. This guards the whole
-    /// "slice user input by byte index" bug class, not just the known cases.
     #[test]
     fn parsers_never_panic_on_hostile_input() {
         let mut prng = crate::fuzz::Prng::new(0xBAD5EED);

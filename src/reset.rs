@@ -1,16 +1,9 @@
-//! Hardware reset over the serial control lines, and serial BREAK injection.
-//! Toggling DTR/RTS lets the tool drop a target into its boot window without a
-//! manual power cycle. The line-to-signal mapping depends on the adapter wiring
-//! (for example esptool maps DTR->IO0 and RTS->EN); this drives the lines, the
-//! board decides what they do.
-
 use std::error::Error;
 use std::thread::sleep;
 use std::time::Duration;
 
 use colored::*;
 
-/// Pulse a reset using one of the named profiles: `dtr`, `rts`, or `esp`.
 pub fn pulse_reset(port: &str, baud: u32, profile: &str) -> Result<(), Box<dyn Error>> {
     let mut p = serialport::new(port, baud)
         .timeout(Duration::from_millis(100))
@@ -49,7 +42,6 @@ pub fn pulse_reset(port: &str, baud: u32, profile: &str) -> Result<(), Box<dyn E
     Ok(())
 }
 
-/// Assert a timed serial BREAK using the TTY's raw fd (Linux/Unix only).
 #[cfg(unix)]
 pub fn send_break(port: &str, baud: u32, duration_ms: u64) -> Result<(), Box<dyn Error>> {
     use std::os::unix::io::AsRawFd;

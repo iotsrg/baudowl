@@ -10,7 +10,7 @@
 //! The BP5 terminal uses VT100/ANSI escape codes which we strip.
 
 use std::error::Error;
-use std::io::{self};
+use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,6 +18,23 @@ use std::time::{Duration, Instant};
 use colored::*;
 
 use crate::ui;
+
+// ── constants ───────────────────────────────────────────────────────────
+
+const BP5_CDC_BAUD: u32 = 115200;
+const CMD_TIMEOUT: Duration = Duration::from_secs(2);
+const DETECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+const VALID_VOLTAGES: &[f32] = &[1.8, 2.5, 3.3, 5.0];
+
+const SCAN_BAUDS: &[u32] = &[
+    115200, 9600, 57600, 38400, 19200, 230400, 460800, 921600,
+    1200, 2400, 4800, 14400, 28800, 76800,
+];
+
+const BAUD_SCAN_WINDOW_MS: u64 = 800;
+const BAUD_SCAN_THRESHOLD: usize = 60;
+const BAUD_SCAN_EARLY_EXIT: usize = 90;
 
 // ── ANSI escape stripping ───────────────────────────────────────────────
 
@@ -28,6 +45,7 @@ fn strip_ansi(raw: &[u8]) -> String {
         if raw[i] == 0x1b {
             i += 1;
             if i < raw.len() && raw[i] == b'[' {
+                // CSI sequence: ESC [ ... final_byte(0x40-0x7E)
                 i += 1;
                 while i < raw.len() && !(0x40..=0x7e).contains(&raw[i]) {
                     i += 1;
@@ -36,12 +54,14 @@ fn strip_ansi(raw: &[u8]) -> String {
                     i += 1;
                 }
             } else if i < raw.len() {
+                // Non-CSI escape: skip one byte after ESC
                 i += 1;
             }
         } else if raw[i] >= 0x20 || raw[i] == b'\n' || raw[i] == b'\r' || raw[i] == b'\t' {
             out.push(raw[i]);
             i += 1;
         } else {
+            // Strip other control chars (BEL, BS, etc.)
             i += 1;
         }
     }
@@ -72,13 +92,14 @@ fn port_read_until(
     loop {
         if Instant::now() >= deadline {
             let cleaned = strip_ansi(&raw);
+            let tail = if cleaned.len() > 120 {
+                &cleaned[cleaned.len() - 120..]
+            } else {
+                &cleaned
+            };
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
-                format!(
-                    "BP5: timeout waiting for {:?} (got: {})",
-                    patterns,
-                    if cleaned.len() > 120 { &cleaned[cleaned.len()-120..] } else { &cleaned }
-                ),
+                format!("BP5: timeout waiting for {:?} (got: {})", patterns, tail),
             ));
         }
         match port.read(&mut buf) {
@@ -114,45 +135,11 @@ fn bp_cmd(
     Ok(text)
 }
 
-#[allow(dead_code)]
-fn bp_cmd_wait(
-    port: &mut dyn serialport::SerialPort,
-    cmd: &str,
-    timeout: Duration,
-) -> io::Result<String> {
-    port.write_all(cmd.as_bytes())?;
-    port.write_all(b"\r\n")?;
-    port.flush()?;
-    std::thread::sleep(Duration::from_millis(200));
-    let mut raw = Vec::new();
-    let mut buf = [0u8; 256];
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        match port.read(&mut buf) {
-            Ok(n) if n > 0 => raw.extend_from_slice(&buf[..n]),
-            Ok(_) => {}
-            Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
-                if !raw.is_empty() {
-                    break;
-                }
-            }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                if !raw.is_empty() {
-                    break;
-                }
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Ok(strip_ansi(&raw))
-}
-
 // ── BP5 detection ───────────────────────────────────────────────────────
 
 pub struct BpInfo {
     pub model: String,
     pub firmware: String,
-    #[allow(dead_code)]
     pub raw_banner: String,
 }
 
@@ -163,7 +150,12 @@ fn bp_detect(port: &mut dyn serialport::SerialPort) -> io::Result<BpInfo> {
     std::thread::sleep(Duration::from_millis(200));
     port_drain(port, 100);
 
-    let text = bp_cmd(port, "i", &[">", "HiZ>", "UART>", "SPI>", "I2C>"], Duration::from_secs(3))?;
+    let text = bp_cmd(
+        port,
+        "i",
+        &[">", "HiZ>", "UART>", "SPI>", "I2C>"],
+        DETECT_TIMEOUT,
+    )?;
 
     let lower = text.to_ascii_lowercase();
     if !lower.contains("bus pirate") {
@@ -173,15 +165,7 @@ fn bp_detect(port: &mut dyn serialport::SerialPort) -> io::Result<BpInfo> {
         ));
     }
 
-    let model = if lower.contains("bus pirate 5") || lower.contains("bp5") {
-        "Bus Pirate 5".to_string()
-    } else if lower.contains("bus pirate v3") || lower.contains("bp v3") {
-        "Bus Pirate v3".to_string()
-    } else if lower.contains("bus pirate v4") {
-        "Bus Pirate v4".to_string()
-    } else {
-        "Bus Pirate (unknown version)".to_string()
-    };
+    let model = parse_model(&lower);
 
     let firmware = text
         .lines()
@@ -193,18 +177,45 @@ fn bp_detect(port: &mut dyn serialport::SerialPort) -> io::Result<BpInfo> {
         .trim()
         .to_string();
 
-    Ok(BpInfo {
-        model,
-        firmware,
-        raw_banner: text,
-    })
+    Ok(BpInfo { model, firmware, raw_banner: text })
+}
+
+fn parse_model(lower: &str) -> String {
+    if lower.contains("bus pirate 5") || lower.contains("bp5") {
+        "Bus Pirate 5".to_string()
+    } else if lower.contains("bus pirate v3") || lower.contains("bp v3") {
+        "Bus Pirate v3".to_string()
+    } else if lower.contains("bus pirate v4") {
+        "Bus Pirate v4".to_string()
+    } else {
+        "Bus Pirate (unknown version)".to_string()
+    }
+}
+
+// ── voltage validation ──────────────────────────────────────────────────
+
+fn validate_voltage(v: f32) -> Result<(), String> {
+    for &valid in VALID_VOLTAGES {
+        if (v - valid).abs() < 0.01 {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "invalid voltage {:.1}V (valid: {})",
+        v,
+        VALID_VOLTAGES
+            .iter()
+            .map(|v| format!("{:.1}", v))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 // ── BP5 configuration ───────────────────────────────────────────────────
 
 fn bp_reset_hiz(port: &mut dyn serialport::SerialPort) -> io::Result<()> {
     port_drain(port, 100);
-    bp_cmd(port, "#", &["HiZ>", "hiz>", ">"], Duration::from_secs(3))?;
+    bp_cmd(port, "#", &["HiZ>", "hiz>", ">"], DETECT_TIMEOUT)?;
     Ok(())
 }
 
@@ -212,25 +223,27 @@ fn bp_configure_uart(
     port: &mut dyn serialport::SerialPort,
     target_baud: u32,
 ) -> io::Result<()> {
-    bp_cmd(port, "m 3", &["speed", "baud", "UART>"], Duration::from_secs(3))?;
+    bp_cmd(port, "m 3", &["speed", "baud", "UART>"], DETECT_TIMEOUT)?;
 
     let baud_str = target_baud.to_string();
     let resp = bp_cmd(
         port,
         &baud_str,
         &["data", "parity", "UART>", ">"],
-        Duration::from_secs(2),
+        CMD_TIMEOUT,
     )?;
 
     let lower = resp.to_ascii_lowercase();
     if lower.contains("data") {
-        bp_cmd(port, "8", &["parity", "stop", "UART>", ">"], Duration::from_secs(2))?;
+        bp_cmd(port, "8", &["parity", "stop", "UART>", ">"], CMD_TIMEOUT)?;
     }
 
-    let lower2 = strip_ansi(&[]).to_ascii_lowercase();
-    let _ = lower2;
-    bp_cmd(port, "1", &["stop", "UART>", ">"], Duration::from_secs(2)).ok();
-    bp_cmd(port, "1", &["UART>", ">"], Duration::from_secs(2)).ok();
+    if let Err(e) = bp_cmd(port, "1", &["stop", "UART>", ">"], CMD_TIMEOUT) {
+        ui::warn(&format!("BP5 parity config: {}", e));
+    }
+    if let Err(e) = bp_cmd(port, "1", &["UART>", ">"], CMD_TIMEOUT) {
+        ui::warn(&format!("BP5 stop-bit config: {}", e));
+    }
 
     ui::detail(&format!("BP5 UART configured: {} 8N1", target_baud));
     Ok(())
@@ -242,30 +255,29 @@ fn bp_power_on(
 ) -> io::Result<()> {
     if (voltage - 3.3).abs() > 0.01 {
         let cmd = format!("W {:.1}", voltage);
-        bp_cmd(port, &cmd, &["UART>", ">", "power"], Duration::from_secs(2))?;
+        bp_cmd(port, &cmd, &["UART>", ">", "power"], CMD_TIMEOUT)?;
     } else {
-        bp_cmd(port, "W", &["UART>", ">", "power", "on"], Duration::from_secs(2))?;
+        bp_cmd(port, "W", &["UART>", ">", "power", "on"], CMD_TIMEOUT)?;
     }
     ui::detail(&format!("BP5 power supply ON ({:.1}V)", voltage));
     std::thread::sleep(Duration::from_millis(200));
     Ok(())
 }
 
-#[allow(dead_code)]
-fn bp_power_off(port: &mut dyn serialport::SerialPort) -> io::Result<()> {
-    bp_cmd(port, "w", &["UART>", ">", "off"], Duration::from_secs(2))?;
+pub fn bp_power_off(port: &mut dyn serialport::SerialPort) -> io::Result<()> {
+    bp_cmd(port, "w", &["UART>", ">", "off"], CMD_TIMEOUT)?;
     ui::detail("BP5 power supply OFF");
     Ok(())
 }
 
 fn bp_pullups_on(port: &mut dyn serialport::SerialPort) -> io::Result<()> {
-    bp_cmd(port, "P", &["UART>", ">", "pull"], Duration::from_secs(2))?;
+    bp_cmd(port, "P", &["UART>", ">", "pull"], CMD_TIMEOUT)?;
     ui::detail("BP5 pull-ups enabled");
     Ok(())
 }
 
 fn bp_read_voltage(port: &mut dyn serialport::SerialPort) -> io::Result<String> {
-    let text = bp_cmd(port, "v", &["UART>", ">", "V"], Duration::from_secs(3))?;
+    let text = bp_cmd(port, "v", &["UART>", ">", "V"], DETECT_TIMEOUT)?;
     Ok(text)
 }
 
@@ -290,11 +302,6 @@ fn bp_enter_bridge(port: &mut dyn serialport::SerialPort) -> io::Result<()> {
 
 // ── baud scanning through BP5 ───────────────────────────────────────────
 
-const SCAN_BAUDS: &[u32] = &[
-    115200, 9600, 57600, 38400, 19200, 230400, 460800, 921600,
-    1200, 2400, 4800, 14400, 28800, 76800,
-];
-
 fn bp_scan_baud(
     port: &mut dyn serialport::SerialPort,
     running: &AtomicBool,
@@ -313,7 +320,7 @@ fn bp_scan_baud(
 
         let mut sample = Vec::new();
         let mut buf = [0u8; 256];
-        let deadline = Instant::now() + Duration::from_millis(800);
+        let deadline = Instant::now() + Duration::from_millis(BAUD_SCAN_WINDOW_MS);
         while Instant::now() < deadline {
             match port.read(&mut buf) {
                 Ok(n) if n > 0 => sample.extend_from_slice(&buf[..n]),
@@ -329,11 +336,17 @@ fn bp_scan_baud(
             let score = (printable * 100) / sample.len();
             ui::detail(&format!(
                 "{}: {} bytes, {}% printable",
-                candidate, sample.len(), score
+                candidate,
+                sample.len(),
+                score
             ));
-            if score > best_score && score >= 60 {
+            if score > best_score && score >= BAUD_SCAN_THRESHOLD {
                 best_score = score;
                 best_baud = Some(candidate);
+            }
+            if score >= BAUD_SCAN_EARLY_EXIT {
+                ui::detail("high confidence, skipping remaining rates");
+                break;
             }
         }
 
@@ -349,8 +362,6 @@ pub struct BpOptions {
     pub voltage: f32,
     pub pullups: bool,
     pub aux_reset: bool,
-    pub info_only: bool,
-    pub scan: bool,
 }
 
 impl Default for BpOptions {
@@ -360,25 +371,15 @@ impl Default for BpOptions {
             voltage: 3.3,
             pullups: false,
             aux_reset: false,
-            info_only: false,
-            scan: false,
         }
     }
 }
 
-pub fn bp_flow(
-    port_path: &str,
-    target_baud: u32,
-    opts: &BpOptions,
-    running: Arc<AtomicBool>,
-) -> Result<(), Box<dyn Error>> {
-    println!(
-        "\n{}",
-        "=== BUS PIRATE 5 ===".bold().magenta()
-    );
+pub fn bp_info(port_path: &str) -> Result<(), Box<dyn Error>> {
+    ui::section("=== BUS PIRATE 5 (info) ===");
     println!("{} {}", "Port:".cyan(), port_path);
 
-    let mut port = serialport::new(port_path, 115200)
+    let mut port = serialport::new(port_path, BP5_CDC_BAUD)
         .timeout(Duration::from_millis(200))
         .open()
         .map_err(|e| format!("open {}: {}", port_path, e))?;
@@ -387,7 +388,78 @@ pub fn bp_flow(
         format!("BP5 detection failed: {} (is this a Bus Pirate?)", e).into()
     })?;
 
-    ui::found(&format!("{}", info.model));
+    ui::found(&info.model);
+    if !info.firmware.is_empty() {
+        ui::detail(&info.firmware);
+    }
+    println!("\n{}", "Banner:".bold().cyan());
+    for line in info.raw_banner.lines() {
+        let l = line.trim();
+        if !l.is_empty() {
+            println!("  {}", l);
+        }
+    }
+
+    bp_reset_hiz(&mut *port)?;
+    let voltages = bp_read_voltage(&mut *port)?;
+    println!("\n{}", "Pin voltages:".bold().cyan());
+    for line in voltages.lines() {
+        let l = line.trim();
+        if l.contains('V') || l.contains('v') {
+            println!("  {}", l);
+        }
+    }
+    Ok(())
+}
+
+pub fn bp_scan(
+    port_path: &str,
+    running: Arc<AtomicBool>,
+) -> Result<(), Box<dyn Error>> {
+    ui::section("=== BUS PIRATE 5 (baud scan) ===");
+    println!("{} {}", "Port:".cyan(), port_path);
+
+    let mut port = serialport::new(port_path, BP5_CDC_BAUD)
+        .timeout(Duration::from_millis(200))
+        .open()
+        .map_err(|e| format!("open {}: {}", port_path, e))?;
+
+    let info = bp_detect(&mut *port)?;
+    ui::found(&info.model);
+    bp_reset_hiz(&mut *port)?;
+
+    let found = bp_scan_baud(&mut *port, &running)?;
+    match found {
+        Some(b) => ui::win("BP5 BAUD DETECTED", &format!("{} baud", b)),
+        None => ui::fail("no readable baud rate found through BP5 bridge"),
+    }
+    Ok(())
+}
+
+pub fn bp_setup(
+    port_path: &str,
+    target_baud: u32,
+    opts: &BpOptions,
+    running: Arc<AtomicBool>,
+) -> Result<(), Box<dyn Error>> {
+    ui::section("=== BUS PIRATE 5 ===");
+    println!("{} {}", "Port:".cyan(), port_path);
+
+    if opts.power {
+        validate_voltage(opts.voltage)
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
+    }
+
+    let mut port = serialport::new(port_path, BP5_CDC_BAUD)
+        .timeout(Duration::from_millis(200))
+        .open()
+        .map_err(|e| format!("open {}: {}", port_path, e))?;
+
+    let info = bp_detect(&mut *port).map_err(|e| -> Box<dyn Error> {
+        format!("BP5 detection failed: {} (is this a Bus Pirate?)", e).into()
+    })?;
+
+    ui::found(&info.model);
     if !info.firmware.is_empty() {
         ui::detail(&info.firmware);
     }
@@ -398,65 +470,51 @@ pub fn bp_flow(
 
     bp_reset_hiz(&mut *port)?;
 
-    if opts.info_only {
+    let configure_result = (|| -> Result<(), Box<dyn Error>> {
+        bp_configure_uart(&mut *port, target_baud)?;
+
+        if opts.power {
+            bp_power_on(&mut *port, opts.voltage)?;
+        }
+
+        if opts.pullups {
+            bp_pullups_on(&mut *port)?;
+        }
+
         let voltages = bp_read_voltage(&mut *port)?;
-        println!("\n{}", "Pin voltages:".bold().cyan());
         for line in voltages.lines() {
             let l = line.trim();
-            if l.contains('V') || l.contains('v') {
-                println!("  {}", l);
+            if l.contains('V')
+                && (l.contains("IO") || l.contains("Vout") || l.contains("vout"))
+            {
+                ui::detail(l);
             }
         }
-        return Ok(());
-    }
 
-    if opts.scan {
-        let found = bp_scan_baud(&mut *port, &running)?;
-        match found {
-            Some(b) => {
-                ui::win("BP5 BAUD DETECTED", &format!("{} baud", b));
-                bp_reset_hiz(&mut *port)?;
-                bp_configure_uart(&mut *port, b)?;
-            }
-            None => {
-                ui::fail("no readable baud rate found through BP5 bridge");
-                return Ok(());
-            }
+        if opts.aux_reset {
+            bp_pulse_aux(&mut *port)?;
+            std::thread::sleep(Duration::from_millis(500));
         }
-    } else {
-        bp_configure_uart(&mut *port, target_baud)?;
-    }
 
-    if opts.power {
-        bp_power_on(&mut *port, opts.voltage)?;
-    }
-
-    if opts.pullups {
-        bp_pullups_on(&mut *port)?;
-    }
-
-    let voltages = bp_read_voltage(&mut *port)?;
-    for line in voltages.lines() {
-        let l = line.trim();
-        if l.contains('V') && (l.contains("IO") || l.contains("Vout") || l.contains("vout")) {
-            ui::detail(l);
+        if !running.load(Ordering::SeqCst) {
+            return Err("interrupted".into());
         }
+
+        bp_enter_bridge(&mut *port)?;
+        Ok(())
+    })();
+
+    if let Err(ref e) = configure_result {
+        if opts.power {
+            let _ = bp_power_off(&mut *port);
+        }
+        return Err(format!("BP5 setup failed: {}", e).into());
     }
 
-    if opts.aux_reset {
-        bp_pulse_aux(&mut *port)?;
-        std::thread::sleep(Duration::from_millis(500));
-    }
-
-    bp_enter_bridge(&mut *port)?;
-
-    ui::win("BP5 READY", &format!(
-        "UART bridge at {} baud - target connected through BP5",
-        if opts.scan { "detected".to_string() } else { target_baud.to_string() }
-    ));
-
-    drop(port);
-
+    ui::win(
+        "BP5 READY",
+        &format!("UART bridge at {} baud", target_baud),
+    );
     Ok(())
 }
 
@@ -465,6 +523,8 @@ pub fn bp_flow(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- ANSI stripping --
 
     #[test]
     fn ansi_strip_removes_sgr() {
@@ -505,5 +565,62 @@ mod tests {
     #[test]
     fn ansi_strip_empty() {
         assert_eq!(strip_ansi(b""), "");
+    }
+
+    // -- model detection --
+
+    #[test]
+    fn parse_model_bp5_variants() {
+        assert_eq!(parse_model("bus pirate 5 rev10"), "Bus Pirate 5");
+        assert_eq!(parse_model("bp5 firmware 2.0"), "Bus Pirate 5");
+    }
+
+    #[test]
+    fn parse_model_bp3_bp4() {
+        assert_eq!(parse_model("bus pirate v3.6"), "Bus Pirate v3");
+        assert_eq!(parse_model("bp v3 community"), "Bus Pirate v3");
+        assert_eq!(parse_model("bus pirate v4.0"), "Bus Pirate v4");
+    }
+
+    #[test]
+    fn parse_model_unknown() {
+        assert_eq!(
+            parse_model("bus pirate something"),
+            "Bus Pirate (unknown version)"
+        );
+    }
+
+    // -- voltage validation --
+
+    #[test]
+    fn valid_voltages_accepted() {
+        assert!(validate_voltage(1.8).is_ok());
+        assert!(validate_voltage(2.5).is_ok());
+        assert!(validate_voltage(3.3).is_ok());
+        assert!(validate_voltage(5.0).is_ok());
+    }
+
+    #[test]
+    fn invalid_voltages_rejected() {
+        assert!(validate_voltage(0.0).is_err());
+        assert!(validate_voltage(2.0).is_err());
+        assert!(validate_voltage(4.0).is_err());
+        assert!(validate_voltage(12.0).is_err());
+    }
+
+    // -- scan bauds --
+
+    #[test]
+    fn scan_bauds_starts_with_common_rates() {
+        assert_eq!(SCAN_BAUDS[0], 115200);
+        assert_eq!(SCAN_BAUDS[1], 9600);
+        assert!(SCAN_BAUDS.contains(&57600));
+        assert!(SCAN_BAUDS.contains(&921600));
+    }
+
+    #[test]
+    fn scan_thresholds_are_sane() {
+        assert!(BAUD_SCAN_THRESHOLD < BAUD_SCAN_EARLY_EXIT);
+        assert!(BAUD_SCAN_EARLY_EXIT <= 100);
     }
 }

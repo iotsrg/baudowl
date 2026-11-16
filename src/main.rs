@@ -695,6 +695,14 @@ struct Args {
     #[arg(long, value_name = "BYTES")]
     flash_size: Option<String>,
 
+    /// Override sector erase size in bytes (default 4096; Micron M25P uses 65536)
+    #[arg(long, value_name = "BYTES")]
+    flash_sector_size: Option<String>,
+
+    /// Override page program size in bytes (default 256)
+    #[arg(long, value_name = "BYTES")]
+    flash_page_size: Option<String>,
+
     /// Baud rate for the serprog programmer link (default 115200)
     #[arg(long, default_value_t = 115200)]
     flash_baud: u32,
@@ -1228,6 +1236,16 @@ impl BaudOwl {
                     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?),
                 None => None,
             };
+            let sector_override = match &self.args.flash_sector_size {
+                Some(s) => Some(parse_hex(s)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?),
+                None => None,
+            };
+            let page_override = match &self.args.flash_page_size {
+                Some(s) => Some(parse_hex(s)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?),
+                None => None,
+            };
             let op = if let Some(ref path) = self.args.flash_read {
                 serprog::SerprogOp::Read { output: path.clone(), start, length }
             } else if let Some(ref path) = self.args.flash_write {
@@ -1243,7 +1261,11 @@ impl BaudOwl {
                 &self.args.port,
                 self.args.flash_baud,
                 op,
-                size_override,
+                serprog::FlashOverrides {
+                    size: size_override,
+                    sector_size: sector_override,
+                    page_size: page_override,
+                },
                 self.running.clone(),
             ) {
                 ui::fail(&format!("serprog: {}", e));

@@ -246,7 +246,9 @@ fn lookup_chip(jedec: &[u8; 3]) -> Option<&'static ChipInfo> {
 }
 
 fn guess_size_from_capacity_byte(cap: u8) -> Option<u32> {
-    if cap >= 0x10 && cap <= 0x1A {
+    // JEDEC capacity byte encodes size as 2^cap bytes.
+    // 0x10 = 64KB (W25X05), 0x1A = 32MB, 0x1D = 256MB (4-byte addr chips).
+    if cap >= 0x10 && cap <= 0x1D {
         Some(1u32 << cap)
     } else {
         None
@@ -744,20 +746,26 @@ fn identify(ch: &mut dyn ByteChannel) -> io::Result<FlashParams> {
     } else {
         let guessed = guess_size_from_capacity_byte(jedec[2]);
         let size = guessed.unwrap_or(0);
+        let mfr = manufacturer_name(jedec[0]);
         let label = format!(
             "{} (unknown type {:02X} {:02X})",
-            manufacturer_name(jedec[0]),
-            jedec[1], jedec[2]
+            mfr, jedec[1], jedec[2]
         );
-        ui::warn(&format!(
-            "chip not in database: JEDEC {:02X} {:02X} {:02X} - {}{}",
-            jedec[0], jedec[1], jedec[2], label,
-            if size > 0 {
-                format!(", guessed size {} bytes (use --flash-size to override)", size)
-            } else {
-                ", cannot guess size (use --flash-size)".to_string()
-            }
-        ));
+        let sr = read_status(ch).unwrap_or(0);
+        if size > 0 {
+            ui::warn(&format!(
+                "chip not in database: JEDEC {:02X} {:02X} {:02X} - {}, guessed {} bytes, SR={:#04x}",
+                jedec[0], jedec[1], jedec[2], label, size, sr,
+            ));
+            ui::detail("using defaults: 4KB sectors, 256B pages (override with --flash-sector-size, --flash-page-size)");
+        } else {
+            ui::warn(&format!(
+                "chip not in database: JEDEC {:02X} {:02X} {:02X} - {}, SR={:#04x}",
+                jedec[0], jedec[1], jedec[2], label, sr,
+            ));
+            ui::detail("cannot guess size from capacity byte; use --flash-size <bytes>");
+            ui::detail("override geometry with --flash-sector-size and --flash-page-size if needed");
+        }
         Ok(FlashParams {
             name: label,
             size,
@@ -924,11 +932,17 @@ pub enum SerprogOp {
     Verify { file: String, start: u32 },
 }
 
+pub struct FlashOverrides {
+    pub size: Option<u32>,
+    pub sector_size: Option<u32>,
+    pub page_size: Option<u32>,
+}
+
 pub fn serprog_flow(
     port: &str,
     baud: u32,
     op: SerprogOp,
-    flash_size_override: Option<u32>,
+    overrides: FlashOverrides,
     running: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn Error>> {
     println!(
@@ -970,12 +984,20 @@ pub fn serprog_flow(
     let chunk = read_chunk_size(&caps);
 
     let flash = identify(&mut ch)?;
-    let chip_size = flash_size_override.unwrap_or(flash.size);
+    let chip_size = overrides.size.unwrap_or(flash.size);
+    let sector_size = overrides.sector_size.unwrap_or(flash.sector_size);
+    let page_size = overrides.page_size.unwrap_or(flash.page_size);
     if chip_size == 0 {
         return Err("cannot determine flash size; use --flash-size <bytes>".into());
     }
     if chip_size > 16 * MB {
         ui::warn("chip > 16 MB: only the first 16 MB is addressable with 24-bit addressing");
+    }
+    if overrides.sector_size.is_some() || overrides.page_size.is_some() {
+        ui::detail(&format!(
+            "geometry override: sector {}KB, page {}B",
+            sector_size / 1024, page_size,
+        ));
     }
 
     println!(
@@ -999,7 +1021,7 @@ pub fn serprog_flow(
                 return Err("input file is empty".into());
             }
             ui::step("WRITE", &format!("{} bytes from {}", data.len(), input));
-            write_full(&mut ch, chip_size, start, &data, flash.sector_size, flash.page_size, &running)?;
+            write_full(&mut ch, chip_size, start, &data, sector_size, page_size, &running)?;
             verify(&mut ch, start, &data, chunk, &running)?;
         }
         SerprogOp::Erase => {
@@ -1274,6 +1296,14 @@ mod tests {
         assert_eq!(guess_size_from_capacity_byte(0x18), Some(16 * MB));
         assert_eq!(guess_size_from_capacity_byte(0x10), Some(64 * KB));
         assert_eq!(guess_size_from_capacity_byte(0x0F), None);
+        // Extended range: large chips with 4-byte addressing
+        // 2^cap bytes: 0x19=32MB, 0x1A=64MB, 0x1B=128MB, 0x1C=256MB, 0x1D=512MB
+        assert_eq!(guess_size_from_capacity_byte(0x19), Some(1u32 << 25)); // 32MB
+        assert_eq!(guess_size_from_capacity_byte(0x1A), Some(1u32 << 26)); // 64MB
+        assert_eq!(guess_size_from_capacity_byte(0x1B), Some(1u32 << 27)); // 128MB
+        assert_eq!(guess_size_from_capacity_byte(0x1C), Some(1u32 << 28)); // 256MB
+        assert_eq!(guess_size_from_capacity_byte(0x1D), Some(1u32 << 29)); // 512MB
+        assert_eq!(guess_size_from_capacity_byte(0x1E), None);
     }
 
     #[test]

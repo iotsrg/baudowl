@@ -1166,26 +1166,39 @@ impl BaudOwl {
             return Ok(());
         }
 
-        // --- Bus Pirate 5 ---
-        if self.args.bp || self.args.bp_info || self.args.bp_scan {
+        // --- Bus Pirate 5 (standalone: info or scan) ---
+        if self.args.bp_info {
+            if let Err(e) = buspirate::bp_info(&self.args.port) {
+                ui::fail(&format!("BP5: {}", e));
+            }
+            return Ok(());
+        }
+        if self.args.bp_scan {
+            if let Err(e) = buspirate::bp_scan(&self.args.port, self.running.clone()) {
+                ui::fail(&format!("BP5: {}", e));
+            }
+            return Ok(());
+        }
+
+        // --- Bus Pirate 5 (bridge pre-step) ---
+        if self.args.bp {
             let target_baud = self.args.baud.unwrap_or(115200);
             let opts = buspirate::BpOptions {
                 power: self.args.bp_power,
                 voltage: self.args.bp_voltage,
                 pullups: self.args.bp_pullups,
                 aux_reset: self.args.bp_aux_reset,
-                info_only: self.args.bp_info,
-                scan: self.args.bp_scan,
+                ..Default::default()
             };
-            if let Err(e) = buspirate::bp_flow(
+            if let Err(e) = buspirate::bp_setup(
                 &self.args.port,
                 target_baud,
                 &opts,
                 self.running.clone(),
             ) {
                 ui::fail(&format!("BP5: {}", e));
+                return Ok(());
             }
-            return Ok(());
         }
 
         // --- serprog (direct SPI flash) ---

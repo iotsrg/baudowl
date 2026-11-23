@@ -37,6 +37,7 @@ mod i2c;
 mod spi_pass;
 mod power_trace;
 mod pattern;
+mod debug;
 
 fn validate_config_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
@@ -712,6 +713,41 @@ struct Args {
 
     #[arg(long)]
     vglitch_trigger_cmd: Option<String>,
+
+    // ── Debug utilities ─────────────────────────────────────────────
+
+    #[arg(long, help = "Live hex+ASCII dump of UART data")]
+    hexdump: bool,
+
+    #[arg(long, default_value_t = 65536, help = "Max bytes for hexdump")]
+    hexdump_max: usize,
+
+    #[arg(long, help = "Timestamped session log to file")]
+    log: Option<String>,
+
+    #[arg(long, help = "Log raw hex instead of text lines")]
+    log_raw: bool,
+
+    #[arg(long, help = "Fingerprint firmware/OS from boot banner")]
+    uart_fingerprint: bool,
+
+    #[arg(long, default_value_t = 5, help = "Seconds to sample for fingerprint")]
+    fingerprint_secs: u64,
+
+    #[arg(long, help = "Live protocol decoder (ASCII/Modbus/NMEA/SLIP/AT)")]
+    bus_decode: bool,
+
+    #[arg(long, default_value_t = 50, help = "Idle gap (ms) between decoded frames")]
+    bus_decode_idle_ms: u64,
+
+    #[arg(long, help = "Trigger-pattern capture (hex bytes, e.g. DEADBEEF)")]
+    trigger_capture: Option<String>,
+
+    #[arg(long, default_value_t = 4096, help = "Bytes to capture after trigger")]
+    trigger_capture_bytes: usize,
+
+    #[arg(long, default_value = "trigger_capture.bin", help = "Output file for trigger capture")]
+    trigger_capture_out: String,
 }
 
 struct BaudOwl {
@@ -1740,6 +1776,80 @@ impl BaudOwl {
             }
             println!();
             ui::win("VOLTAGE GLITCH", &format!("{} glitch pulses sent", glitch_count));
+            return Ok(());
+        }
+
+        // ── Debug utilities ──────────────────────────────────────────
+
+        if self.args.hexdump {
+            if let Err(e) = debug::hexdump(
+                &self.args.port,
+                baud,
+                self.args.hexdump_max,
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("HEXDUMP: {}", e));
+            }
+            return Ok(());
+        }
+
+        if let Some(ref out_path) = self.args.log {
+            if let Err(e) = debug::log_session(
+                &self.args.port,
+                baud,
+                out_path,
+                self.args.log_raw,
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("LOG: {}", e));
+            }
+            return Ok(());
+        }
+
+        if self.args.uart_fingerprint {
+            if let Err(e) = debug::fingerprint(
+                &self.args.port,
+                baud,
+                self.args.fingerprint_secs,
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("FINGERPRINT: {}", e));
+            }
+            return Ok(());
+        }
+
+        if self.args.bus_decode {
+            if let Err(e) = debug::bus_decode(
+                &self.args.port,
+                baud,
+                self.args.bus_decode_idle_ms,
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("BUS DECODE: {}", e));
+            }
+            return Ok(());
+        }
+
+        if let Some(ref trigger_hex) = self.args.trigger_capture {
+            let trigger_bytes: Vec<u8> = (0..trigger_hex.len())
+                .step_by(2)
+                .filter_map(|i| {
+                    let end = (i + 2).min(trigger_hex.len());
+                    u8::from_str_radix(&trigger_hex[i..end], 16).ok()
+                })
+                .collect();
+            if trigger_bytes.is_empty() {
+                ui::fail("--trigger-capture: invalid hex string");
+            } else if let Err(e) = debug::trigger_capture(
+                &self.args.port,
+                baud,
+                &trigger_bytes,
+                self.args.trigger_capture_bytes,
+                &self.args.trigger_capture_out,
+                self.running.clone(),
+            ) {
+                ui::fail(&format!("TRIGGER CAPTURE: {}", e));
+            }
             return Ok(());
         }
 
